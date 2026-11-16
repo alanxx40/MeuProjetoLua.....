@@ -1,4 +1,4 @@
--- PAIN HOOD V16 - IMPLEMENTACAO REMOTA (separada da configuracao)
+-- PAIN HOOD V17 - IMPLEMENTACAO REMOTA (separada da configuracao)
 -- Este arquivo pressupoe que a tabela global Config ja existe no ambiente que o carrega.
 -- Mantenha a configuracao no arquivo/trecho local e hospede este arquivo como Main.lua.
 
@@ -464,7 +464,27 @@ local function getConstApi()
     return getter, setter, nil
 end
 
-local function gunFromConsts(vals)
+local function functionSource(fn)
+    local infoApi = debug and debug.getinfo
+    if type(infoApi) ~= "function" then return "" end
+    local ok, info = pcall(infoApi, fn)
+    if not ok or type(info) ~= "table" then return "" end
+    return tostring(info.source or info.short_src or "")
+end
+
+local function gunFromConsts(vals, fn)
+    -- Primeiro tenta identificar a origem da funcao pelo script-fonte.
+    -- Isso evita classificar a Double-Barrel como Tactical apenas por constantes compartilhadas.
+    local source = functionSource(fn)
+    if source:find("DB_GunClient", 1, true)
+        or source:find("[Double-Barrel SG]", 1, true) then
+        return "[Double-Barrel SG]"
+    end
+    if source:find("Tactical_GunClient", 1, true)
+        or source:find("[TacticalShotgun]", 1, true) then
+        return "[TacticalShotgun]"
+    end
+
     local has = {}
     local p03, p06, p015 = false, false, false
     for _, value in pairs(vals) do
@@ -473,9 +493,11 @@ local function gunFromConsts(vals)
         if isNear(value, 0.06) then p06 = true end
         if isNear(value, 0.015) then p015 = true end
     end
-    -- Assinatura conjunta obtida do bytecode exportado. Nao classifica o Revolver.
-    if not (has.random and has.CTS and has.LocalMousePos and has.HandleRayCasting
-            and has.Muzzle and p03 and p06) then
+
+    -- O bytecode exportado de DB_GunClient nao contem a string CTS.
+    -- DB usa 0.03/0.06; Tactical tambem apresenta 0.015.
+    if not (has.random and has.Vector3 and has.LocalMousePos and has.HandleRayCasting
+            and has.Muzzle and has.Unit and has.Range and p03 and p06) then
         return nil
     end
     return p015 and "[TacticalShotgun]" or "[Double-Barrel SG]"
@@ -530,7 +552,7 @@ local function updateSpread()
         spreadLastError = "PlaceId nao corresponde a uma experiencia analisada"
         if not warnedSpread then
             warnedSpread = true
-            warn("[PH V16] Experiencia nao corresponde ao Pain Hood analisado; spread nao modificado.")
+            warn("[PH V17] Experiencia nao corresponde ao Pain Hood analisado; spread nao modificado.")
         end
         return
     end
@@ -540,7 +562,7 @@ local function updateSpread()
         spreadLastError = apiError
         if not warnedSpread then
             warnedSpread = true
-            warn("[PH V16] Spread inativo: " .. apiError)
+            warn("[PH V17] Spread inativo: " .. apiError)
         end
         return
     end
@@ -556,7 +578,7 @@ local function updateSpread()
     end
     if not gcOk or type(objects) ~= "table" then
         spreadLastError = "getgc nao retornou funcoes"
-        warn("[PH V16] Spread inativo: " .. spreadLastError)
+        warn("[PH V17] Spread inativo: " .. spreadLastError)
         return
     end
 
@@ -579,7 +601,7 @@ local function updateSpread()
             else
                 local vals = readConsts(fn, getter)
                 if vals then
-                    local gun = gunFromConsts(vals)
+                    local gun = gunFromConsts(vals, fn)
                     if gun then
                         local entryNew = { gun = gun, values = {} }
                         for idx, value in pairs(vals) do
@@ -613,12 +635,16 @@ local function updateSpread()
     if not warnedSpread then
         warnedSpread = true
         if changed > 0 then
-            warn(("[PH V16] %d constantes ajustadas em %d funcao(oes) identificada(s). Resultado visual/servidor ainda precisa de validacao.")
+            warn(("[PH V17] %d constantes ajustadas em %d funcao(oes) identificada(s). Resultado visual/servidor ainda precisa de validacao.")
                 :format(changed, matches))
         else
-            warn("[PH V16] Nenhuma constante ativa foi alterada: " .. tostring(spreadLastError or "sem constantes confirmadas"))
+            warn("[PH V17] Nenhuma constante ativa foi alterada: " .. tostring(spreadLastError or "sem constantes confirmadas"))
         end
-        warn("[PH V16] Revolver continua sem patch: assinatura especifica nao foi confirmada no bytecode analisado.")
+        warn(("[PH V17] Contagem por arma: DB=%d | Tactical=%d | Revolver=%d")
+            :format(spreadPatched["[Double-Barrel SG]"] or 0,
+                    spreadPatched["[TacticalShotgun]"] or 0,
+                    spreadPatched["[Revolver]"] or 0))
+        warn("[PH V17] Revolver permanece sem identificacao confirmada no bytecode analisado.")
     end
 end
 
@@ -1104,7 +1130,7 @@ local function status()
     local localMatches = {}
     for name, count in pairs(spreadMatches) do localMatches[name] = count end
     return {
-        Version = 16,
+        Version = 17,
         Running = running,
         InfiniteJump = false,
         NoJumpCooldown = Config.Movement["No Jump Cooldown"],
@@ -1478,7 +1504,7 @@ local function stop()
     restoreSpread()
     if env.DHC_Stop == stop then env.DHC_Stop = nil end
     if env.DHC_Status == status then env.DHC_Status = nil end
-    print("[PH V16] Parado; menu fechado e constantes restauradas onde possivel.")
+    print("[PH V17] Parado; menu fechado e constantes restauradas onde possivel.")
 end
 
 env.DHC_Stop = stop
@@ -1486,7 +1512,7 @@ env.DHC_Status = status
 refreshESP()
 updateHitboxes()
 updateSpread()
-print("[PH V16] Iniciado: INSERT menu | Pulo somente COM OS PES APOIADOS; sem buffer, sem voo e sem cooldown artificial")
-print("[PH V16] Trigger: delay cliente 0 | DB 180 | Revolver 260 | Tactical 180 | limite geral 280 studs")
-print("[PH V16] Menu: INSERT | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
-warn("[PH V16] Experimento de patch de CONSTANTES especificas. Sem hook FireServer; resultado real nao testado.")
+print("[PH V17] Iniciado: INSERT menu | Pulo somente COM OS PES APOIADOS; sem buffer, sem voo e sem cooldown artificial")
+print("[PH V17] Trigger: delay cliente 0 | DB 180 | Revolver 260 | Tactical 180 | limite geral 280 studs")
+print("[PH V17] Menu: INSERT | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
+warn("[PH V17] Experimento de patch de CONSTANTES especificas. Sem hook FireServer; resultado real nao testado.")
