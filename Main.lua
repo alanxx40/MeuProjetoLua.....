@@ -1,174 +1,6 @@
---[[
-    PAIN HOOD / CONFIG ABERTA V15 - PLACEID ATUALIZADO
-    Baseada integralmente na V14; unica alteracao funcional: allowlist de PlaceIds
-    para o patch de spread aceitar 97124701004636 e 119280064370189.
-
-    O bytecode capturado evidencia chamadas math.random e multiplicadores
-    0.03 / 0.06 no GunClient da DB; 0.03 / 0.06 / 0.015 no da Tactical,
-    compondo deslocamentos Vector3 adicionados ao vetor da mira.
-    Revolver nao usa a mesma rotina de random no seu GunClient.
-
-    Este experimento tenta reduzir esses multiplicadores na FUNCAO VIVA
-    (se o executor expuser getgc + debug.getconstants/setconstant).
-    Nao faz hook FireServer, nao executa codigo externo, nem decompila.
-
-    NAO HA TESTE DE FUNCIONAMENTO NO JOGO / SERVIDOR.
-    Nao ha garantia de evitar moderacao/anticheat, e o uso pode ser detectado.
-    Caso o patch falhe, o status indicara isso explicitamente.
-
-    Teclas: P Triggerbot, C Camlock, T ESP, U Inventario, INSERT Menu.
-    Pulo: somente com apoio real dos pes, sem buffer no ar nem impulso extra.
-    Consulte getgenv().DHC_Status() e encerre com getgenv().DHC_Stop().
-]]
-
-Config = {
-    ["Triggerbot"] = {
-        ["Enabled"]   = true,
-        ["Type"]      = "Hold",
-        ["Key"]       = "P",
-        ["InputType"] = "Keyboard",
-        ["FireDelay"] = 0, -- ZERO intervalo artificial no cliente; disparos respeitam cadencia do jogo
-        ["Range-Check"] = {
-            ["Enabled"] = true,
-            ["Data"] = {
-                ["[Double-Barrel SG]"] = 180, -- alcance moderado para DB (studs)
-                ["[Revolver]"]         = 260, -- revolver tem maior alcance util
-                ["[TacticalShotgun]"]  = 180, -- alcance moderado para Tactical
-            },
-            ["HardCap"] = 280, -- limite global para impedir alcance de mapa inteiro
-        },
-        ["Hitbox"] = {
-            ["Enabled"] = true,
-            ["Checks"] = {
-                ["ForceField"]  = true,
-                ["Knocked"]     = false,
-                ["Grabbed"]     = false,
-                ["Crew"]        = false,
-                ["Friend"]      = false,
-                ["Visible"]     = true,
-                ["SelfKnocked"] = true,
-            },
-        },
-        ["KnifeNames"] = {
-            "Knife", "Blade", "Bat", "Sword", "Katana", "Machete",
-        },
-        ["Whitelist"] = {
-            ["Enabled"] = true,
-            ["List"]    = {}, -- jogadore(s) protegidos: ignorados por trigger/camlock
-        },
-    },
-    ["IncognitoWhitelist"] = {}, -- players marcados nao aparecem no ESP e nao sao alvos
-    ["ESP"] = {
-        ["Enabled"] = true,
-        ["Type"]    = "Toggle",
-        ["Key"]     = "T",
-        ["Size"]    = 8, -- tamanho da fonte do nome
-    },
-    ["Movement"] = {
-        ["No Jump Cooldown"] = true, -- solicita saltos nativos consecutivos sem espera adicional do script
-        ["JumpBufferSeconds"] = 0, -- 0: nao guarda comando durante o ar; apertar apenas quando estiver apoiado
-        ["GroundRayTolerance"] = 0.10, -- margem em studs abaixo da sola do pe (contato, nao proximidade ampla)
-        ["GroundStableFrames"] = 2, -- exige no minimo 2 atualizacoes consecutivas com contato real
-        ["InfiniteJump"] = {
-            ["Enabled"] = false, -- desativado: sem salto no ar e sem efeito de voo
-            ["Key"] = "Space", -- tecla mantida por compatibilidade com o painel/config
-            ["Mode"] = "GroundOnly", -- somente pulo normal com contato no solo
-        },
-        ["Spiderman"] = {
-            ["Enabled"]        = false,
-            ["jumppower"]      = 45,
-            ["knifejumppower"] = 45,
-        },
-    },
-    ["AutoSwitch"] = {
-        ["Enabled"] = false,
-        ["Key"]     = "G",
-    },
-    ["AutoReset"] = {
-        ["Enabled"] = false,
-    },
-    ["Rage"] = {
-        ["Enabled"] = false,
-        ["Teleports"] = {
-            ["Police"] = {
-                ["Key"]      = "T", -- compartilha tecla com ESP: Rage tem prioridade
-                ["Position"] = Vector3.new(-258.71, 21.75, -126.47),
-            },
-            ["CarMethod"] = {
-                ["Key"]      = "Z",
-                ["Position"] = Vector3.new(56.37, 25.63, -833.07),
-            },
-        },
-        ["SkyReset"] = {
-            ["Key"]       = "Q",
-            ["SkyHeight"] = 1000,
-        },
-        ["TeleportToTarget"] = {
-            ["Key"] = "H",
-        },
-    },
-    ["InventorySorter"] = {
-        ["Enabled"] = true,
-        ["Key"]     = "U",
-        ["Order"] = {
-            [1] = "[Double-Barrel SG]",
-            [2] = "[Revolver]",
-            [3] = "[TacticalShotgun]",
-            [4] = "[Knife]",
-        },
-    },
-    ["Camlock"] = {
-        ["Enabled"] = true,
-        ["Sticky"]  = true,
-        ["Key"]     = "C",
-        ["Point"]   = "Nearest Point",
-        ["Type"]    = "Advanced",
-        ["Scale"]   = 0.9,
-        ["FOV"] = {
-            ["Size"] = 30, -- raio da aquisicao do alvo na tela, em pixels
-        },
-        ["Smoothing"] = {
-            ["Enabled"] = true,
-            ["Always"]  = true,
-            ["Ground"]  = 0.03, -- menor = movimento MAIS lento/suave
-            ["Air"]     = 0.03,
-        },
-        ["Prediction"] = {
-            ["Enabled"] = false,
-            ["Ground"]  = 0.1225,
-            ["Air"]     = 0.1225,
-        },
-        ["Checks"] = {
-            ["Wall"]          = true,
-            ["Knife"]         = true,
-            ["FirstPerson"]   = true,
-            ["ThirdPerson"]   = false,
-            ["RightClicking"] = true,
-        },
-    },
-    ["HitboxExpander"] = {
-        ["Enabled"]      = false, -- MUDE PARA true para tentar expandir localmente
-        ["X"]            = 14,
-        ["Y"]            = 14,
-        ["Z"]            = 14,
-        ["RefreshTime"]  = 1, -- intervalo de atualizacao, segundos
-        ["Visible"]      = false,
-        ["Color"]        = Color3.fromRGB(255, 60, 60),
-        ["Transparency"] = 0.5,
-        ["BloodBypass"]  = true, -- mantido por compatibilidade, NAO implementado
-    },
-    ["SpreadModification"] = {
-        ["Enabled"]     = true,
-        ["RefreshTime"] = 6, -- varredura de funcoes vivas (evita custo por frame)
-        ["Guns"] = {
-            -- Multiplicadores dos deslocamentos do vetor no GunClient:
-            -- 1 = original; 0.65 = 65%; 0 = sem esses deslocamentos.
-            ["[Double-Barrel SG]"] = 0,
-            ["[TacticalShotgun]"]  = 0,
-            ["[Revolver]"]         = 0
-        },
-    },
-}
+-- PAIN HOOD V16 - IMPLEMENTACAO REMOTA (separada da configuracao)
+-- Este arquivo pressupoe que a tabela global Config ja existe no ambiente que o carrega.
+-- Mantenha a configuracao no arquivo/trecho local e hospede este arquivo como Main.lua.
 
 -- =============================================================
 -- SERVICOS, ESTADO E LIMPEZA DE EXECUCOES ANTERIORES
@@ -608,13 +440,13 @@ local function updateHitboxes()
 end
 
 -- =============================================================
--- SPREAD V7: PATCH DIRECIONADO A CONSTANTES DE FUNCOES VIVAS
+-- SPREAD V8: REAPLICACAO DINAMICA DOS MULTIPLICADORES CONFIGURADOS
 -- =============================================================
--- Origem dos valores: bytecode dos GunClient que voce exportou.
--- Nao tenta alteracao dos objetos Tool nem intercepta remotes.
--- Precisa de getgc, debug.getconstants e debug.setconstant.
+-- Mantem os valores originais por funcao. Assim, alterar Config.SpreadModification.Guns
+-- durante a execucao reaplica o multiplicador sem depender dos valores ja modificados.
+-- A deteccao continua limitada as assinaturas confirmadas no bytecode analisado.
 local function isNear(x, target)
-    return type(x) == "number" and math.abs(x - target) < 1e-8
+    return type(x) == "number" and math.abs(x - target) < 1e-6
 end
 
 local function readConsts(fn, getter)
@@ -641,7 +473,7 @@ local function gunFromConsts(vals)
         if isNear(value, 0.06) then p06 = true end
         if isNear(value, 0.015) then p015 = true end
     end
-    -- Assinatura conjunta obtida do bytecode real, reduzindo falsos positivos.
+    -- Assinatura conjunta obtida do bytecode exportado. Nao classifica o Revolver.
     if not (has.random and has.CTS and has.LocalMousePos and has.HandleRayCasting
             and has.Muzzle and p03 and p06) then
         return nil
@@ -656,10 +488,31 @@ local function restoreSpread()
         for idx, old in pairs(data.values) do
             pcall(setter, fn, idx, old)
         end
+    end
+    for fn in pairs(spreadOriginal) do
         spreadOriginal[fn] = nil
     end
     spreadPatched["[Double-Barrel SG]"] = 0
     spreadPatched["[TacticalShotgun]"] = 0
+end
+
+local function applySpreadEntry(fn, entry, mult, getter, setter)
+    local changed = 0
+    for idx, original in pairs(entry.values) do
+        local target = original * mult
+        local setOk, setErr = pcall(setter, fn, idx, target)
+        if setOk then
+            local check = readConsts(fn, getter)
+            if check and isNear(check[idx], target) then
+                changed = changed + 1
+            else
+                spreadLastError = "setconstant nao confirmou leitura de retorno"
+            end
+        else
+            spreadLastError = tostring(setErr or "setconstant falhou")
+        end
+    end
+    return changed
 end
 
 local function updateSpread()
@@ -668,88 +521,104 @@ local function updateSpread()
         if next(spreadOriginal) then restoreSpread() end
         return
     end
+
     local supportedSpreadPlaces = {
         [97124701004636] = true,
         [119280064370189] = true,
     }
     if not supportedSpreadPlaces[game.PlaceId] then
+        spreadLastError = "PlaceId nao corresponde a uma experiencia analisada"
         if not warnedSpread then
             warnedSpread = true
-            warn("[PH V15] Experiencia nao corresponde ao Pain Hood analisado; spread nao modificado.")
+            warn("[PH V16] Experiencia nao corresponde ao Pain Hood analisado; spread nao modificado.")
         end
         return
     end
+
     local getter, setter, apiError = getConstApi()
     if apiError then
+        spreadLastError = apiError
         if not warnedSpread then
             warnedSpread = true
-            spreadLastError = apiError
-            warn("[PH V15] Spread INATIVO: " .. apiError)
+            warn("[PH V16] Spread inativo: " .. apiError)
         end
         return
     end
 
     spreadAttempted = true
+    spreadLastError = nil
+    spreadPatched["[Double-Barrel SG]"] = 0
+    spreadPatched["[TacticalShotgun]"] = 0
+
     local gcOk, objects = pcall(getgc, true)
     if not gcOk or type(objects) ~= "table" then
         gcOk, objects = pcall(getgc)
     end
     if not gcOk or type(objects) ~= "table" then
         spreadLastError = "getgc nao retornou funcoes"
-        warn("[PH V15] Spread INATIVO: " .. spreadLastError)
+        warn("[PH V16] Spread inativo: " .. spreadLastError)
         return
     end
 
     local matches, changed = 0, 0
+    local seen = {}
     for _, fn in pairs(objects) do
         if type(fn) == "function" then
-            local vals = readConsts(fn, getter)
-            if vals then
-                local gun = gunFromConsts(vals)
-                if gun then
-                    matches = matches + 1
-                    local mult = tonumber(cfg.Guns[gun])
-                    if mult then
-                        local entry = spreadOriginal[fn]
-                        if not entry then
-                            entry = { gun=gun, values={} }
-                            spreadOriginal[fn] = entry
-                        end
-                        local n = 0
+            local entry = spreadOriginal[fn]
+            if entry then
+                -- Funcao ja identificada: reaplica usando os valores originais guardados,
+                -- mesmo que a constante atual ja seja 0 ou outro multiplicador.
+                seen[fn] = true
+                matches = matches + 1
+                local mult = tonumber(cfg.Guns[entry.gun])
+                if mult then
+                    local n = applySpreadEntry(fn, entry, mult, getter, setter)
+                    spreadPatched[entry.gun] = (spreadPatched[entry.gun] or 0) + n
+                    changed = changed + n
+                end
+            else
+                local vals = readConsts(fn, getter)
+                if vals then
+                    local gun = gunFromConsts(vals)
+                    if gun then
+                        local entryNew = { gun = gun, values = {} }
                         for idx, value in pairs(vals) do
-                            if type(idx) == "number" and (isNear(value, 0.03) or isNear(value, 0.06) or isNear(value, 0.015)) then
-                                if entry.values[idx] == nil then entry.values[idx] = value end
-                                local target = entry.values[idx] * mult
-                                local success = pcall(setter, fn, idx, target)
-                                if success then
-                                    local check = readConsts(fn, getter)
-                                    if check and isNear(check[idx], target) then
-                                        n = n + 1
-                                    else
-                                        spreadLastError = "setconstant nao confirmou leitura de retorno"
-                                    end
-                                end
+                            if type(idx) == "number" and
+                               (isNear(value, 0.03) or isNear(value, 0.06) or isNear(value, 0.015)) then
+                                entryNew.values[idx] = value
                             end
                         end
-                        if n > 0 then
-                            spreadPatched[gun] = spreadPatched[gun] + n
-                            changed = changed + n
+                        if next(entryNew.values) then
+                            spreadOriginal[fn] = entryNew
+                            seen[fn] = true
+                            matches = matches + 1
+                            local mult = tonumber(cfg.Guns[gun])
+                            if mult then
+                                local n = applySpreadEntry(fn, entryNew, mult, getter, setter)
+                                spreadPatched[gun] = (spreadPatched[gun] or 0) + n
+                                changed = changed + n
+                            end
                         end
                     end
                 end
             end
         end
     end
-    spreadCandidatesSeen = spreadCandidatesSeen + matches
+
+    spreadCandidatesSeen = matches
+    if matches == 0 then
+        spreadLastError = spreadLastError or "nenhuma funcao correspondeu a assinatura conhecida; bytecode pode ter mudado"
+    end
+
     if not warnedSpread then
         warnedSpread = true
         if changed > 0 then
-            warn(('[PH V15] %d constantes ajustadas em %d funcao(oes) viva(s). Confirmar com teste visual/dano; nao garante validacao do servidor.')
+            warn(("[PH V16] %d constantes ajustadas em %d funcao(oes) identificada(s). Resultado visual/servidor ainda precisa de validacao.")
                 :format(changed, matches))
         else
-            warn('[PH V15] Nenhuma constante ativa foi alterada; runtime nao forneceu as funcoes com a assinatura esperada.')
+            warn("[PH V16] Nenhuma constante ativa foi alterada: " .. tostring(spreadLastError or "sem constantes confirmadas"))
         end
-        warn('[PH V15] Revolver: bytecode nao mostrou a mesma dispersao aleatoria; sem patch especifico para ele.')
+        warn("[PH V16] Revolver continua sem patch: assinatura especifica nao foi confirmada no bytecode analisado.")
     end
 end
 
@@ -1235,7 +1104,7 @@ local function status()
     local localMatches = {}
     for name, count in pairs(spreadMatches) do localMatches[name] = count end
     return {
-        Version = 14,
+        Version = 16,
         Running = running,
         InfiniteJump = false,
         NoJumpCooldown = Config.Movement["No Jump Cooldown"],
@@ -1609,7 +1478,7 @@ local function stop()
     restoreSpread()
     if env.DHC_Stop == stop then env.DHC_Stop = nil end
     if env.DHC_Status == status then env.DHC_Status = nil end
-    print("[PH V15] Parado; menu fechado e constantes restauradas onde possivel.")
+    print("[PH V16] Parado; menu fechado e constantes restauradas onde possivel.")
 end
 
 env.DHC_Stop = stop
@@ -1617,7 +1486,7 @@ env.DHC_Status = status
 refreshESP()
 updateHitboxes()
 updateSpread()
-print("[PH V15] Iniciado: INSERT menu | Pulo somente COM OS PES APOIADOS; sem buffer, sem voo e sem cooldown artificial")
-print("[PH V15] Trigger: delay cliente 0 | DB 180 | Revolver 260 | Tactical 180 | limite geral 280 studs")
-print("[PH V15] Menu: INSERT | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
-warn("[PH V15] Experimento de patch de CONSTANTES especificas. Sem hook FireServer; resultado real nao testado.")
+print("[PH V16] Iniciado: INSERT menu | Pulo somente COM OS PES APOIADOS; sem buffer, sem voo e sem cooldown artificial")
+print("[PH V16] Trigger: delay cliente 0 | DB 180 | Revolver 260 | Tactical 180 | limite geral 280 studs")
+print("[PH V16] Menu: INSERT | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
+warn("[PH V16] Experimento de patch de CONSTANTES especificas. Sem hook FireServer; resultado real nao testado.")
