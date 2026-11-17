@@ -1287,7 +1287,7 @@ local function buildMenu()
     }, menuGui)
     uiNew("UICorner", {CornerRadius=UDim.new(0,10)}, menuPanel)
     uiNew("UIStroke", {Color=Color3.fromRGB(26,26,28), Thickness=1}, menuPanel)
-    uiText(menuPanel, "hg", {
+    uiText(menuPanel, "V4ware", {
         Position=UDim2.fromOffset(20,14), Size=UDim2.fromOffset(50,22),
         Font=Enum.Font.GothamMedium, TextSize=14,
         TextColor3=Color3.fromRGB(40,198,241),
