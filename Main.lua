@@ -1,4 +1,4 @@
--- V4WARE V20 - PREMIUM HUB (base V19 preservada, Config separada)
+-- V4WARE V20.1 - PREMIUM HOVER (base V20 preservada, Config separada)
 -- Este arquivo pressupoe que a tabela global Config ja existe no ambiente que o carrega.
 -- Mantenha a configuracao no arquivo/trecho local e hospede este arquivo como Main.lua.
 
@@ -7,6 +7,7 @@
 -- =============================================================
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 local Stats = game:GetService("Stats")
@@ -1339,6 +1340,7 @@ end
 -- Interface redesenhada sobre a base V19; modulos principais preservados.
 -- =============================================================
 local menuGui, menuPanel, menuPlayers, menuCount, tabWhitelist, tabIncognito, tabSystem, monitorFrame
+local panelScale
 local selectedTab = "overview"
 local selectedPlayerTab = "whitelist"
 local menuVisible = false
@@ -1428,6 +1430,80 @@ local function uiText(parent, txt, props)
     return uiNew("TextLabel", p, parent)
 end
 
+-- Hover motion: tweens event-driven (sem loop por frame), com escala e realce discretos.
+local HOVER_IN = TweenInfo.new(0.14, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+local HOVER_OUT = TweenInfo.new(0.17, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local PAGE_IN = TweenInfo.new(0.16, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+
+local function playUiTween(target, info, properties)
+    if not target or not target.Parent then return nil end
+    local ok, tween = pcall(function()
+        return TweenService:Create(target, info, properties)
+    end)
+    if ok and tween then
+        tween:Play()
+        return tween
+    end
+    return nil
+end
+
+local function addHoverMotion(guiObject, options)
+    options = options or {}
+    if not guiObject or not guiObject:IsA("GuiObject") then return end
+
+    local scale = uiNew("UIScale", {Scale = 1}, guiObject)
+    local stroke = guiObject:FindFirstChildOfClass("UIStroke")
+    local baseBackground = guiObject.BackgroundColor3
+    local baseTransparency = guiObject.BackgroundTransparency
+    local baseTextColor = guiObject:IsA("TextButton") and guiObject.TextColor3 or nil
+    local baseStrokeColor = stroke and stroke.Color or nil
+    local baseStrokeThickness = stroke and stroke.Thickness or nil
+    local hoverScale = options.Scale or 1.025
+    local blend = options.Blend or 0.10
+
+    guiObject.MouseEnter:Connect(function()
+        playUiTween(scale, HOVER_IN, {Scale = hoverScale})
+
+        local enterProperties = {}
+        if baseTransparency < 1 and options.Background ~= false then
+            enterProperties.BackgroundColor3 = baseBackground:Lerp(accentColor, blend)
+        end
+        if baseTextColor then
+            enterProperties.TextColor3 = baseTextColor:Lerp(Color3.fromRGB(255, 255, 255), 0.14)
+        end
+        if next(enterProperties) then
+            playUiTween(guiObject, HOVER_IN, enterProperties)
+        end
+        if stroke then
+            playUiTween(stroke, HOVER_IN, {
+                Color = accentColor,
+                Thickness = math.max(baseStrokeThickness or 1, 1.35),
+            })
+        end
+    end)
+
+    guiObject.MouseLeave:Connect(function()
+        playUiTween(scale, HOVER_OUT, {Scale = 1})
+
+        local leaveProperties = {}
+        if baseTransparency < 1 and options.Background ~= false then
+            leaveProperties.BackgroundColor3 = baseBackground
+        end
+        if baseTextColor then
+            leaveProperties.TextColor3 = baseTextColor
+        end
+        if next(leaveProperties) then
+            playUiTween(guiObject, HOVER_OUT, leaveProperties)
+        end
+        if stroke then
+            playUiTween(stroke, HOVER_OUT, {
+                Color = baseStrokeColor,
+                Thickness = baseStrokeThickness,
+            })
+        end
+    end)
+end
+
 local function uiButton(parent, txt, props)
     local p = {
         Text = txt,
@@ -1442,6 +1518,7 @@ local function uiButton(parent, txt, props)
     local button = uiNew("TextButton", p, parent)
     uiNew("UICorner", {CornerRadius = UDim.new(0, 8)}, button)
     uiNew("UIStroke", {Color = Color3.fromRGB(47, 54, 64), Thickness = 1}, button)
+    addHoverMotion(button, {Scale = 1.035, Blend = 0.18})
     return button
 end
 
@@ -1455,6 +1532,7 @@ local function uiCard(parent, name, position, size)
     }, parent)
     uiNew("UICorner", {CornerRadius = UDim.new(0, 10)}, card)
     uiNew("UIStroke", {Color = Color3.fromRGB(43, 49, 58), Thickness = 1}, card)
+    addHoverMotion(card, {Scale = 1.018, Blend = 0.12})
     return card
 end
 
@@ -1522,6 +1600,7 @@ local function buildMenu()
         BorderSizePixel = 0,
         Active = true,
     }, menuGui)
+    panelScale = uiNew("UIScale", {Scale = 1}, menuPanel)
     uiNew("UICorner", {CornerRadius = UDim.new(0, 14)}, menuPanel)
     uiNew("UIStroke", {Color = Color3.fromRGB(43, 49, 59), Thickness = 1}, menuPanel)
     uiNew("UISizeConstraint", {
@@ -1559,7 +1638,7 @@ local function buildMenu()
         TextSize = 18,
         TextColor3 = Color3.fromRGB(241, 244, 249),
     })
-    uiText(header, "CLEAN CONTROL CENTER  •  V20", {
+    uiText(header, "CLEAN CONTROL CENTER  •  V20.1", {
         Position = UDim2.fromOffset(67, 35),
         Size = UDim2.fromOffset(240, 14),
         Font = Enum.Font.GothamMedium,
@@ -1647,7 +1726,7 @@ local function buildMenu()
         TextSize = 8,
         TextColor3 = Color3.fromRGB(101, 112, 127),
     })
-    uiText(footer, "V20  •  PREMIUM", {
+    uiText(footer, "V20.1  •  PREMIUM", {
         Position = UDim2.fromOffset(9, 17),
         Size = UDim2.new(1, -18, 0, 15),
         Font = Enum.Font.GothamMedium,
@@ -1663,10 +1742,12 @@ local function buildMenu()
     }, body)
 
     local pages, navItems = {}, {}
+    local lastRenderedTab = nil
     local function makePage(name)
         local page = uiNew("Frame", {
             Name = name,
             Size = UDim2.fromScale(1, 1),
+            Position = UDim2.fromOffset(0, 0),
             BackgroundTransparency = 1,
             Visible = false,
         }, content)
@@ -1739,7 +1820,39 @@ local function buildMenu()
             TextSize = 8,
             TextColor3 = Color3.fromRGB(97, 108, 123),
         })
-        navItems[name] = {button = b, bar = bar, icon = icon, title = title}
+        local navScale = uiNew("UIScale", {Scale = 1}, b)
+        local navStroke = uiNew("UIStroke", {
+            Color = accentColor,
+            Thickness = 1,
+            Transparency = 1,
+        }, b)
+        local navState = {
+            button = b, bar = bar, icon = icon, title = title,
+            active = false, scale = navScale, stroke = navStroke,
+        }
+        navItems[name] = navState
+
+        b.MouseEnter:Connect(function()
+            playUiTween(navScale, HOVER_IN, {Scale = 1.025})
+            playUiTween(navStroke, HOVER_IN, {Transparency = 0.55, Color = accentColor})
+            if not navState.active then
+                playUiTween(b, HOVER_IN, {
+                    BackgroundTransparency = 0.42,
+                    BackgroundColor3 = Color3.fromRGB(25, 30, 37),
+                })
+                playUiTween(title, HOVER_IN, {TextColor3 = Color3.fromRGB(226, 232, 241)})
+                playUiTween(icon, HOVER_IN, {TextColor3 = accentColor})
+            end
+        end)
+        b.MouseLeave:Connect(function()
+            playUiTween(navScale, HOVER_OUT, {Scale = 1})
+            playUiTween(navStroke, HOVER_OUT, {Transparency = navState.active and 0.72 or 1})
+            if not navState.active then
+                playUiTween(b, HOVER_OUT, {BackgroundTransparency = 1})
+                playUiTween(title, HOVER_OUT, {TextColor3 = Color3.fromRGB(135, 146, 161)})
+                playUiTween(icon, HOVER_OUT, {TextColor3 = Color3.fromRGB(135, 146, 161)})
+            end
+        end)
         return b
     end
 
@@ -2276,15 +2389,34 @@ local function buildMenu()
 
     renderMenu = function()
         for pageName, pageFrame in pairs(pages) do
-            pageFrame.Visible = pageName:lower() == selectedTab
+            local activePage = pageName:lower() == selectedTab
+            pageFrame.Visible = activePage
+            if activePage and lastRenderedTab ~= selectedTab then
+                pageFrame.Position = UDim2.fromOffset(8, 0)
+                playUiTween(pageFrame, PAGE_IN, {Position = UDim2.fromOffset(0, 0)})
+            end
         end
+        lastRenderedTab = selectedTab
+
         for name, item in pairs(navItems) do
             local active = name:lower() == selectedTab
-            item.bar.Visible = active
+            local wasActive = item.active
+            item.active = active
+            if active then
+                item.bar.Visible = true
+                if not wasActive then
+                    item.bar.Size = UDim2.fromOffset(3, 0)
+                    playUiTween(item.bar, PAGE_IN, {Size = UDim2.fromOffset(3, 25)})
+                end
+            else
+                item.bar.Visible = false
+                item.bar.Size = UDim2.fromOffset(3, 0)
+            end
             item.button.BackgroundTransparency = active and 0 or 1
             item.button.BackgroundColor3 = active and Color3.fromRGB(25, 30, 37) or Color3.fromRGB(17, 20, 25)
             item.title.TextColor3 = active and Color3.fromRGB(241, 244, 249) or Color3.fromRGB(135, 146, 161)
             item.icon.TextColor3 = active and accentColor or Color3.fromRGB(135, 146, 161)
+            item.stroke.Transparency = active and 0.72 or 1
         end
 
         if selectedTab == "players" then
@@ -2385,7 +2517,11 @@ connectSignal(UserInputService.InputBegan, function(input, processed)
     if input.KeyCode == panelKey and menuGui then
         menuVisible = not menuVisible
         menuGui.Enabled = menuVisible
-        if menuVisible and renderMenu then renderMenu() end
+        if menuVisible then
+            panelScale.Scale = 0.985
+            playUiTween(panelScale, PAGE_IN, {Scale = 1})
+            if renderMenu then renderMenu() end
+        end
     end
 end)
 
