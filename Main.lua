@@ -1,2607 +1,1024 @@
--- V4WARE V20.1 - PREMIUM HOVER (base V20 preservada, Config separada)
--- Este arquivo pressupoe que a tabela global Config ja existe no ambiente que o carrega.
--- Mantenha a configuracao no arquivo/trecho local e hospede este arquivo como Main.lua.
+--[[
+    V4ware V22 - Studio QA / Hitbox Lab
+    LocalScript for Roblox Studio experiences you own or are authorized to test.
 
--- =============================================================
--- SERVICOS, ESTADO E LIMPEZA DE EXECUCOES ANTERIORES
--- =============================================================
+    Install:
+      StarterPlayer > StarterPlayerScripts > LocalScript
+
+    Hitbox Lab scope:
+      * Visual debug boxes only (BoxHandleAdornment)
+      * Only Models explicitly tagged "V4wareTestDummy"
+      * Player characters are excluded
+      * Does NOT change collision, damage, targeting, or server-side hitboxes
+      * X/Y/Z are visual scale multipliers relative to HumanoidRootPart size
+      * Transparency: 0 = opaque, 1 = invisible
+
+    This is a Studio QA panel, not an executor script.
+]]
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
-local Workspace = game:GetService("Workspace")
 local Stats = game:GetService("Stats")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local CollectionService = game:GetService("CollectionService")
+local Workspace = game:GetService("Workspace")
+
 local LocalPlayer = Players.LocalPlayer
-local sessionStartedAt = os.clock()
-local env = (type(getgenv) == "function" and getgenv()) or _G
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
-local oldCfg = env.DHC_Config
-if type(env.DHC_Stop) == "function" then
-    pcall(env.DHC_Stop)
-end
-if type(oldCfg) == "table" then
-    if oldCfg.Triggerbot and oldCfg.Triggerbot.Whitelist and type(oldCfg.Triggerbot.Whitelist.List) == "table" then
-        Config.Triggerbot.Whitelist.List = oldCfg.Triggerbot.Whitelist.List
-    end
-    if type(oldCfg.IncognitoWhitelist) == "table" then
-        Config.IncognitoWhitelist = oldCfg.IncognitoWhitelist
-    end
+local GUI_NAME = "V4wareV22StudioQA"
+local DUMMY_TAG = "V4wareTestDummy"
+
+local previous = PlayerGui:FindFirstChild(GUI_NAME)
+if previous then
+    previous:Destroy()
 end
 
-env.DHC_Config = Config
-local spectateTarget = nil
-local spectateOldType = nil
-local spectateOldSubject = nil
-local running = true
-local connections = {}
-local espObjects = {}
-local hitboxOriginal = {}
-local spreadOriginal = {} -- [funcao] = { gun="...", values={[indice]=valor_original} }
-local spreadPatched = { ["[Double-Barrel SG]"] = 0, ["[TacticalShotgun]"] = 0, ["[Revolver]"] = 0 }
-local spreadCandidatesSeen = 0
-local spreadAttempted = false
-local spreadLastError = nil
-local triggerActive = false
--- Weapon Switch: uma tecla executa a sequencia de armas, sem alterar cooldowns do jogo.
-local weaponSwitchBusy = false
-local weaponSwitchLastStart = -1e9
-local weaponSwitchLastResult = "Ainda nao acionado"
-local weaponSwitchLastError = nil
-local weaponSwitchLastAttempts = 0
-local weaponSwitchLastSkipped = 0
-local rightMouseHeld = false
-local espActive = Config.ESP.Enabled
-local camActive = false
-local camTarget = nil
-local lastShot = 0
-local nextESP = 0
-local nextHitbox = 0
-local nextSpread = 0
-local nextReset = 0
-local warnedHitbox = false
-local warnedSpread = false
-local spreadMatches = spreadPatched
-
-local function connectSignal(signal, callback)
-    local connection = signal:Connect(callback)
-    table.insert(connections, connection)
-    return connection
-end
-
-local function charOf(player)
-    return player and player.Character or nil
-end
-
-local function humanoidOf(character)
-    return character and character:FindFirstChildOfClass("Humanoid") or nil
-end
-
-local function rootOf(character)
-    return character and character:FindFirstChild("HumanoidRootPart") or nil
-end
-
-local function equippedTool()
-    local character = charOf(LocalPlayer)
-    return character and character:FindFirstChildOfClass("Tool") or nil
-end
-
-local function camera()
-    return Workspace.CurrentCamera
-end
-
-local function pressed(input, key)
-    return input.UserInputType == Enum.UserInputType.Keyboard
-        and input.KeyCode == Enum.KeyCode[tostring(key)]
-end
-
-local function knife(tool)
-    if not tool then return false end
-    for _, name in ipairs(Config.Triggerbot.KnifeNames) do
-        if string.find(string.lower(tool.Name), string.lower(name), 1, true) then
-            return true
-        end
-    end
-    return false
-end
-
-local function flag(character, name)
-    if not character then return false end
-    if character:GetAttribute(name) == true then return true end
-    local thing = character:FindFirstChild(name, true)
-    return thing ~= nil and thing:IsA("BoolValue") and thing.Value == true
-end
-
-local function knocked(character)
-    return flag(character, "K.O") or flag(character, "Knocked") or flag(character, "KO")
-end
-
-local function grabbed(character)
-    return flag(character, "Grabbed")
-        or (character ~= nil and character:FindFirstChild("GRABBING_CONSTRAINT", true) ~= nil)
-end
-
-local function crew(player)
-    local folder = player and player:FindFirstChild("DataFolder")
-    local info = folder and folder:FindFirstChild("Information")
-    local value = info and info:FindFirstChild("Crew")
-    if value and value:IsA("StringValue") then return value.Value end
-    return nil
-end
-
-local function isInList(list, player)
-    if type(list) ~= "table" or not player then return false end
-    if list[player.Name] == true or list[player.UserId] == true or list[tostring(player.UserId)] == true then
-        return true
-    end
-    for key, value in pairs(list) do
-        if (value == true and (tostring(key) == player.Name or tostring(key) == tostring(player.UserId)))
-            or (value ~= true and (tostring(value) == player.Name or tostring(value) == tostring(player.UserId))) then
-            return true
-        end
-    end
-    return false
-end
-
-local function isWhitelisted(player)
-    local w = Config.Triggerbot.Whitelist
-    return w.Enabled and isInList(w.List, player)
-end
-
-local function isIncognito(player)
-    return isInList(Config.IncognitoWhitelist, player)
-end
-
--- Whitelist da interface e PROTECAO: jogadores marcados nao viram alvo.
-local function onWhitelist(player)
-    return not isWhitelisted(player) and not isIncognito(player)
-end
-
-local function passes(player, checks)
-    if not player or player == LocalPlayer or not onWhitelist(player) then return false end
-    local character = charOf(player)
-    local hum = humanoidOf(character)
-    if not character or not hum or hum.Health <= 0 then return false end
-    checks = checks or {}
-    if checks.ForceField and character:FindFirstChildOfClass("ForceField") then return false end
-    if checks.Knocked and knocked(character) then return false end
-    if checks.Grabbed and grabbed(character) then return false end
-    if checks.SelfKnocked and knocked(charOf(LocalPlayer)) then return false end
-    if checks.Friend then
-        local ok, yes = pcall(function() return LocalPlayer:IsFriendsWith(player.UserId) end)
-        if ok and yes then return false end
-    end
-    if checks.Crew then
-        local mine, theirs = crew(LocalPlayer), crew(player)
-        if mine and mine ~= "" and mine == theirs then return false end
-    end
-    return true
-end
-
-local function visible(part, character)
-    local cam = camera()
-    if not cam or not part then return false end
-    local difference = part.Position - cam.CFrame.Position
-    if difference.Magnitude < 0.01 then return true end
-    local filter = {}
-    if charOf(LocalPlayer) then table.insert(filter, charOf(LocalPlayer)) end
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = filter
-    params.IgnoreWater = true
-    local hit = Workspace:Raycast(cam.CFrame.Position, difference, params)
-    return hit == nil or (character and hit.Instance:IsDescendantOf(character))
-end
-
-local function playerFromPart(part)
-    local item = part
-    while item and item ~= Workspace do
-        if item:IsA("Model") then
-            local player = Players:GetPlayerFromCharacter(item)
-            if player then return player end
-        end
-        item = item.Parent
-    end
-    return nil
-end
-
-local function aimPart(character)
-    local cam = camera()
-    if not cam or not character then return nil, math.huge end
-    local mousePos = UserInputService:GetMouseLocation()
-    local candidate, distance = nil, math.huge
-    local names = { "Head", "UpperTorso", "Torso", "HumanoidRootPart", "LowerTorso" }
-    for _, name in ipairs(names) do
-        local part = character:FindFirstChild(name)
-        if part and part:IsA("BasePart") then
-            local onScreenPos, onScreen = cam:WorldToViewportPoint(part.Position)
-            if onScreen then
-                local d = (Vector2.new(onScreenPos.X, onScreenPos.Y) - mousePos).Magnitude
-                if d < distance then
-                    distance, candidate = d, part
-                end
-            end
-        end
-    end
-    return candidate, distance
-end
-
--- =============================================================
--- CAMLOCK (CLIENT-SIDE CAMERA)
--- =============================================================
-local function findCamTarget()
-    local bestPlayer = nil
-    local distance = math.max(0, tonumber(Config.Camlock.FOV.Size) or 30)
-    for _, player in ipairs(Players:GetPlayers()) do
-        if passes(player, { ForceField = true, SelfKnocked = true }) then
-            local part, d = aimPart(charOf(player))
-            if part and d <= distance then
-                if not Config.Camlock.Checks.Wall or visible(part, charOf(player)) then
-                    bestPlayer, distance = player, d
-                end
-            end
-        end
-    end
-    return bestPlayer
-end
-
-local function camAllowed()
-    if spectateTarget or not Config.Camlock.Enabled or not camActive then return false end
-    if Config.Camlock.Checks.RightClicking and not rightMouseHeld then return false end
-    if Config.Camlock.Checks.Knife and knife(equippedTool()) then return false end
-    local cam = camera()
-    local char = charOf(LocalPlayer)
-    local head = char and char:FindFirstChild("Head")
-    if not cam or not head then return false end
-    local fp = (cam.CFrame.Position - head.Position).Magnitude <= 1.6
-    if fp and not Config.Camlock.Checks.FirstPerson then return false end
-    if not fp and not Config.Camlock.Checks.ThirdPerson then return false end
-    return true
-end
-
-local function updateCam(dt)
-    if not camAllowed() then return end
-    if not camTarget or not passes(camTarget) then
-        camTarget = findCamTarget()
-    end
-    if not camTarget then return end
-    local character = charOf(camTarget)
-    local part = aimPart(character)
-    if not part then camTarget = nil return end
-    if Config.Camlock.Checks.Wall and not visible(part, character) then
-        if not Config.Camlock.Sticky then camTarget = nil end
-        return
-    end
-    local dest = part.Position
-    local targetHumanoid = humanoidOf(character)
-    local airborne = targetHumanoid and targetHumanoid.FloorMaterial == Enum.Material.Air
-    if Config.Camlock.Prediction.Enabled then
-        local ahead = airborne and Config.Camlock.Prediction.Air or Config.Camlock.Prediction.Ground
-        dest = dest + part.AssemblyLinearVelocity * (tonumber(ahead) or 0)
-    end
-    local cam = camera()
-    if not cam or (dest - cam.CFrame.Position).Magnitude < 0.01 then return end
-    local goal = CFrame.lookAt(cam.CFrame.Position, dest)
-    if Config.Camlock.Smoothing.Enabled then
-        local s = airborne and Config.Camlock.Smoothing.Air or Config.Camlock.Smoothing.Ground
-        s = math.clamp((tonumber(s) or 0) * (tonumber(Config.Camlock.Scale) or 1), 0, 1)
-        local alpha = 1 - math.pow(1 - s, math.max(dt, 0) * 60)
-        cam.CFrame = cam.CFrame:Lerp(goal, alpha)
-    else
-        cam.CFrame = goal
-    end
-end
-
--- =============================================================
--- TRIGGERBOT (TENTA ACIONAR TOOL; NAO IGNORA VALIDACOES DO JOGO)
--- =============================================================
-local function attemptShot(tool)
-    -- Usar o evento natural Tool:Activate para nao depender de codigo remoto.
-    -- Alguns jogos so disparam pela entrada real do mouse: nesse caso nao funcionara.
-    local ok = pcall(function() tool:Activate() end)
-    if ok then lastShot = os.clock() end
-end
-
-local function updateTrigger()
-    if weaponSwitchBusy then return end -- evita disparos concorrentes durante a sequencia
-    if not Config.Triggerbot.Enabled or not triggerActive then return end
-    -- FireDelay=0: nenhuma espera artificial antes de tentar Tool:Activate().
-    -- Executa a checagem a cada RenderStepped; nao acelera a cadencia imposta pelo jogo.
-    local clientDelay = math.max(0, tonumber(Config.Triggerbot.FireDelay) or 0)
-    if clientDelay > 0 and os.clock() - lastShot < clientDelay then return end
-    local tool = equippedTool()
-    if not tool or knife(tool) then return end
-    local range = Config.Triggerbot["Range-Check"]
-    local maxDist = range.Data[tool.Name]
-    if range.Enabled and maxDist == nil then return end
-    local cam = camera()
-    if not cam then return end
-    local mouse = UserInputService:GetMouseLocation()
-    local ray = cam:ViewportPointToRay(mouse.X, mouse.Y)
-    local filter = {}
-    if charOf(LocalPlayer) then table.insert(filter, charOf(LocalPlayer)) end
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = filter
-    params.IgnoreWater = true
-    -- Limite real: aplica distancia maxima por arma e teto global.
-    local length = math.clamp(tonumber(maxDist) or 0, 0, math.max(1, tonumber(range.HardCap) or 280))
-    if length <= 0 then return end
-    local hit = Workspace:Raycast(ray.Origin, ray.Direction * length, params)
-    if not hit then return end
-    local target = playerFromPart(hit.Instance)
-    if not target or not onWhitelist(target) then return end
-    -- Segunda verificacao: distancia entre personagens, nao apenas camera e alvo.
-    local myRoot = rootOf(charOf(LocalPlayer))
-    local targetRoot = rootOf(charOf(target))
-    if not myRoot or not targetRoot then return end
-    if (targetRoot.Position - myRoot.Position).Magnitude > length then return end
-    if Config.Triggerbot.Hitbox.Enabled and not passes(target, Config.Triggerbot.Hitbox.Checks) then return end
-    if not passes(target) then return end
-    if Config.Triggerbot.Hitbox.Checks.Visible and not visible(hit.Instance, charOf(target)) then return end
-    attemptShot(tool)
-end
-
--- =============================================================
--- ESP: HIGHLIGHT + NOME, VISUALIZACAO CLIENTE
--- =============================================================
-local function clearESP(player)
-    local entry = espObjects[player]
-    if not entry then return end
-    if entry.tag then entry.tag:Destroy() end
-    if entry.highlight then entry.highlight:Destroy() end
-    espObjects[player] = nil
-end
-
-local function refreshESP()
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            local char = charOf(player)
-            local head = char and char:FindFirstChild("Head")
-            local hum = humanoidOf(char)
-            local entry = espObjects[player]
-            if not espActive or not Config.ESP.Enabled or isIncognito(player) or not head or not hum or hum.Health <= 0 then
-                clearESP(player)
-            elseif not entry or entry.character ~= char then
-                clearESP(player)
-                local h = Instance.new("Highlight")
-                h.Name = "DHC_ESP_Highlight"
-                h.Adornee = char
-                h.FillTransparency = 0.85
-                h.OutlineTransparency = 0
-                h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                h.Parent = char
-
-                local gui = Instance.new("BillboardGui")
-                gui.Name = "DHC_ESP_Name"
-                gui.Adornee = head
-                gui.Size = UDim2.fromOffset(180, 28)
-                gui.StudsOffset = Vector3.new(0, 2.6, 0)
-                gui.AlwaysOnTop = true
-                gui.Parent = head
-
-                local label = Instance.new("TextLabel")
-                label.Name = "Name"
-                label.BackgroundTransparency = 1
-                label.Size = UDim2.fromScale(1, 1)
-                label.Font = Enum.Font.GothamBold
-                label.TextColor3 = Color3.new(1, 1, 1)
-                label.TextStrokeTransparency = 0.4
-                label.TextSize = tonumber(Config.ESP.Size) or 8
-                label.Text = player.DisplayName
-                label.Parent = gui
-                espObjects[player] = {character = char, highlight = h, tag = gui, label = label}
-            else
-                entry.label.TextSize = tonumber(Config.ESP.Size) or 8
-            end
-        end
-    end
-end
-
--- =============================================================
--- HITBOX EXPANDER: SOMENTE ALTERACAO LOCAL DO HUMANOIDROOTPART
--- =============================================================
-local function restoreHitboxes()
-    for part, old in pairs(hitboxOriginal) do
-        if part.Parent then
-            pcall(function()
-                part.Size = old.Size
-                part.Transparency = old.Transparency
-                part.Color = old.Color
-                part.CanCollide = old.CanCollide
-            end)
-        end
-        hitboxOriginal[part] = nil
-    end
-end
-
-local function updateHitboxes()
-    local cfg = Config.HitboxExpander
-    if not cfg.Enabled then
-        if next(hitboxOriginal) then restoreHitboxes() end
-        return
-    end
-    if cfg.BloodBypass and not warnedHitbox then
-        warnedHitbox = true
-        warn("[DHC] BloodBypass: flag mantida, mas sem implementacao (logica original oculta).")
-    end
-    local size = Vector3.new(
-        math.clamp(tonumber(cfg.X) or 14, 1, 50),
-        math.clamp(tonumber(cfg.Y) or 14, 1, 50),
-        math.clamp(tonumber(cfg.Z) or 14, 1, 50)
-    )
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            local part = rootOf(charOf(player))
-            if part and part:IsA("BasePart") then
-                if not hitboxOriginal[part] then
-                    hitboxOriginal[part] = {
-                        Size = part.Size, Color = part.Color,
-                        Transparency = part.Transparency, CanCollide = part.CanCollide,
-                    }
-                end
-                pcall(function()
-                    part.Size = size
-                    part.CanCollide = false
-                    part.Color = cfg.Color
-                    part.Transparency = cfg.Visible and math.clamp(cfg.Transparency, 0, 1) or 1
-                end)
-            end
-        end
-    end
-end
-
--- =============================================================
--- SPREAD V8: REAPLICACAO DINAMICA DOS MULTIPLICADORES CONFIGURADOS
--- =============================================================
--- Mantem os valores originais por funcao. Assim, alterar Config.SpreadModification.Guns
--- durante a execucao reaplica o multiplicador sem depender dos valores ja modificados.
--- A deteccao continua limitada as assinaturas confirmadas no bytecode analisado.
-local function isNear(x, target)
-    return type(x) == "number" and math.abs(x - target) < 1e-6
-end
-
-local function readConsts(fn, getter)
-    local ok, vals = pcall(getter, fn)
-    if ok and type(vals) == "table" then return vals end
-    return nil
-end
-
-local function getConstApi()
-    local getter = debug and debug.getconstants or getconstants
-    local setter = debug and debug.setconstant or setconstant
-    if type(getgc) ~= "function" or type(getter) ~= "function" or type(setter) ~= "function" then
-        return nil, nil, "Executor sem getgc/debug.getconstants/debug.setconstant"
-    end
-    return getter, setter, nil
-end
-
-local function functionSource(fn)
-    local infoApi = debug and debug.getinfo
-    if type(infoApi) ~= "function" then return "" end
-    local ok, info = pcall(infoApi, fn)
-    if not ok or type(info) ~= "table" then return "" end
-    return tostring(info.source or info.short_src or "")
-end
-
-local function gunFromConsts(vals, fn)
-    -- Primeiro tenta identificar a origem da funcao pelo script-fonte.
-    -- Isso evita classificar a Double-Barrel como Tactical apenas por constantes compartilhadas.
-    local source = functionSource(fn)
-    if source:find("DB_GunClient", 1, true)
-        or source:find("[Double-Barrel SG]", 1, true) then
-        return "[Double-Barrel SG]"
-    end
-    if source:find("Tactical_GunClient", 1, true)
-        or source:find("[TacticalShotgun]", 1, true) then
-        return "[TacticalShotgun]"
-    end
-
-    local has = {}
-    local p03, p06, p015 = false, false, false
-    for _, value in pairs(vals) do
-        if type(value) == "string" then has[value] = true end
-        if isNear(value, 0.03) then p03 = true end
-        if isNear(value, 0.06) then p06 = true end
-        if isNear(value, 0.015) then p015 = true end
-    end
-
-    -- O bytecode exportado de DB_GunClient nao contem a string CTS.
-    -- DB usa 0.03/0.06; Tactical tambem apresenta 0.015.
-    if not (has.random and has.Vector3 and has.LocalMousePos and has.HandleRayCasting
-            and has.Muzzle and has.Unit and has.Range and p03 and p06) then
-        return nil
-    end
-    return p015 and "[TacticalShotgun]" or "[Double-Barrel SG]"
-end
-
-local function restoreSpread()
-    local _, setter = getConstApi()
-    if not setter then return end
-    for fn, data in pairs(spreadOriginal) do
-        for idx, old in pairs(data.values) do
-            pcall(setter, fn, idx, old)
-        end
-    end
-    for fn in pairs(spreadOriginal) do
-        spreadOriginal[fn] = nil
-    end
-    spreadPatched["[Double-Barrel SG]"] = 0
-    spreadPatched["[TacticalShotgun]"] = 0
-end
-
-local function applySpreadEntry(fn, entry, mult, getter, setter)
-    local changed = 0
-    for idx, original in pairs(entry.values) do
-        local target = original * mult
-        local setOk, setErr = pcall(setter, fn, idx, target)
-        if setOk then
-            local check = readConsts(fn, getter)
-            if check and isNear(check[idx], target) then
-                changed = changed + 1
-            else
-                spreadLastError = "setconstant nao confirmou leitura de retorno"
-            end
-        else
-            spreadLastError = tostring(setErr or "setconstant falhou")
-        end
-    end
-    return changed
-end
-
-local function updateSpread()
-    local cfg = Config.SpreadModification
-    if not cfg.Enabled then
-        if next(spreadOriginal) then restoreSpread() end
-        return
-    end
-
-    local supportedSpreadPlaces = {
-        [97124701004636] = true,
-        [119280064370189] = true,
-    }
-    if not supportedSpreadPlaces[game.PlaceId] then
-        spreadLastError = "PlaceId nao corresponde a uma experiencia analisada"
-        if not warnedSpread then
-            warnedSpread = true
-            warn("[V4ware V20] Experiencia nao corresponde ao Pain Hood analisado; spread nao modificado.")
-        end
-        return
-    end
-
-    local getter, setter, apiError = getConstApi()
-    if apiError then
-        spreadLastError = apiError
-        if not warnedSpread then
-            warnedSpread = true
-            warn("[V4ware V20] Spread inativo: " .. apiError)
-        end
-        return
-    end
-
-    spreadAttempted = true
-    spreadLastError = nil
-    spreadPatched["[Double-Barrel SG]"] = 0
-    spreadPatched["[TacticalShotgun]"] = 0
-
-    local gcOk, objects = pcall(getgc, true)
-    if not gcOk or type(objects) ~= "table" then
-        gcOk, objects = pcall(getgc)
-    end
-    if not gcOk or type(objects) ~= "table" then
-        spreadLastError = "getgc nao retornou funcoes"
-        warn("[V4ware V20] Spread inativo: " .. spreadLastError)
-        return
-    end
-
-    local matches, changed = 0, 0
-    local seen = {}
-    for _, fn in pairs(objects) do
-        if type(fn) == "function" then
-            local entry = spreadOriginal[fn]
-            if entry then
-                -- Funcao ja identificada: reaplica usando os valores originais guardados,
-                -- mesmo que a constante atual ja seja 0 ou outro multiplicador.
-                seen[fn] = true
-                matches = matches + 1
-                local mult = tonumber(cfg.Guns[entry.gun])
-                if mult then
-                    local n = applySpreadEntry(fn, entry, mult, getter, setter)
-                    spreadPatched[entry.gun] = (spreadPatched[entry.gun] or 0) + n
-                    changed = changed + n
-                end
-            else
-                local vals = readConsts(fn, getter)
-                if vals then
-                    local gun = gunFromConsts(vals, fn)
-                    if gun then
-                        local entryNew = { gun = gun, values = {} }
-                        for idx, value in pairs(vals) do
-                            if type(idx) == "number" and
-                               (isNear(value, 0.03) or isNear(value, 0.06) or isNear(value, 0.015)) then
-                                entryNew.values[idx] = value
-                            end
-                        end
-                        if next(entryNew.values) then
-                            spreadOriginal[fn] = entryNew
-                            seen[fn] = true
-                            matches = matches + 1
-                            local mult = tonumber(cfg.Guns[gun])
-                            if mult then
-                                local n = applySpreadEntry(fn, entryNew, mult, getter, setter)
-                                spreadPatched[gun] = (spreadPatched[gun] or 0) + n
-                                changed = changed + n
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    spreadCandidatesSeen = matches
-    if matches == 0 then
-        spreadLastError = spreadLastError or "nenhuma funcao correspondeu a assinatura conhecida; bytecode pode ter mudado"
-    end
-
-    if not warnedSpread then
-        warnedSpread = true
-        if changed > 0 then
-            warn(("[V4ware V20] %d constantes ajustadas em %d funcao(oes) identificada(s). Resultado visual/servidor ainda precisa de validacao.")
-                :format(changed, matches))
-        else
-            warn("[V4ware V20] Nenhuma constante ativa foi alterada: " .. tostring(spreadLastError or "sem constantes confirmadas"))
-        end
-        warn(("[V4ware V20] Contagem por arma: DB=%d | Tactical=%d | Revolver=%d")
-            :format(spreadPatched["[Double-Barrel SG]"] or 0,
-                    spreadPatched["[TacticalShotgun]"] or 0,
-                    spreadPatched["[Revolver]"] or 0))
-        warn("[V4ware V20] Revolver permanece sem identificacao confirmada no bytecode analisado.")
-    end
-end
-
--- =============================================================
--- MOVIMENTO, ORDEM DE ARMAS, TELEPORTES
--- =============================================================
-local function sortInventory()
-    if not Config.InventorySorter.Enabled then return end
-    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-    if not backpack then return end
-    local list, rank = {}, {}
-    for order, name in ipairs(Config.InventorySorter.Order) do rank[name] = order end
-    for _, item in ipairs(backpack:GetChildren()) do
-        if item:IsA("Tool") then table.insert(list, item) end
-    end
-    table.sort(list, function(a, b)
-        local aRank, bRank = rank[a.Name] or 9999, rank[b.Name] or 9999
-        if aRank ~= bRank then return aRank < bRank end
-        return a.Name < b.Name
-    end)
-    -- Tentativa local de reordenar Backpack (a UI do jogo pode ignorar).
-    for _, item in ipairs(list) do item.Parent = nil end
-    for _, item in ipairs(list) do item.Parent = backpack end
-end
-
-local function autoSwitch()
-    if not Config.AutoSwitch.Enabled then return end
-    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-    local char = charOf(LocalPlayer)
-    local hum = humanoidOf(char)
-    if not backpack or not char or not hum then return end
-    local selected = nil
-    for _, name in ipairs(Config.InventorySorter.Order) do
-        local item = backpack:FindFirstChild(name)
-        if item and item:IsA("Tool") then selected = item break end
-    end
-    if not selected then selected = backpack:FindFirstChildOfClass("Tool") end
-    if selected then hum:EquipTool(selected) end
-end
-
--- =============================================================
--- V4WARE WEAPON SWITCH: UMA TECLA, TRES ARMAS EM SEQUENCIA
--- =============================================================
--- Usa exclusivamente Humanoid:EquipTool e Tool:Activate/Deactivate.
--- Nao modifica recarga, cadencia, eventos remotos ou validacoes do jogo.
--- A chamada Activate confirma uma tentativa, nao o registro do tiro no servidor.
-local function weaponSwitchConfig()
-    if type(Config.WeaponSwitch) ~= "table" then
-        Config.WeaponSwitch = {
-            Enabled = true, Key = "V",
-            Order = {"[Double-Barrel SG]", "[TacticalShotgun]", "[Revolver]"},
-            EquipDelay = 0.20, ShotHold = 0.06, BetweenDelay = 0.12,
-            Cooldown = 1.50, RestorePrevious = true, SkipEmpty = true,
-        }
-    end
-    return Config.WeaponSwitch
-end
-
-local function findWeapon(name, backpack, character)
-    local t = character and character:FindFirstChild(name)
-    if not (t and t:IsA("Tool")) then
-        t = backpack and backpack:FindFirstChild(name)
-    end
-    return t and t:IsA("Tool") and t or nil
-end
-
-local function weaponAmmoEmpty(tool)
-    -- Fica desativavel no Config: algumas armas usam contadores diferentes.
-    local ammo = tool:FindFirstChild("Ammo") or tool:FindFirstChild("ClientAmmo")
-    return ammo and ammo:IsA("ValueBase") and type(ammo.Value) == "number" and ammo.Value <= 0
-end
-
-local function requestWeaponSwitch()
-    local cfg = weaponSwitchConfig()
-    if not cfg.Enabled or weaponSwitchBusy or not running then return end
-    local now = os.clock()
-    local cooldown = math.clamp(tonumber(cfg.Cooldown) or 1.5, 0, 30)
-    if now - weaponSwitchLastStart < cooldown then return end
-    local character = charOf(LocalPlayer)
-    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-    local hum = humanoidOf(character)
-    if not character or not backpack or not hum or hum.Health <= 0 then
-        weaponSwitchLastError = "Personagem/Backpack/Humanoid indisponivel"
-        return
-    end
-    if type(cfg.Order) ~= "table" then
-        weaponSwitchLastError = "WeaponSwitch.Order deve ser uma lista"
-        return
-    end
-
-    weaponSwitchBusy = true
-    weaponSwitchLastStart = now
-    weaponSwitchLastError = nil
-    weaponSwitchLastResult = "Em andamento"
-    weaponSwitchLastAttempts = 0
-    weaponSwitchLastSkipped = 0
-
-    local original = equippedTool()
-    task.spawn(function()
-        local ok, err = pcall(function()
-            local equipDelay = math.clamp(tonumber(cfg.EquipDelay) or 0.20, 0.05, 2)
-            local shotHold = math.clamp(tonumber(cfg.ShotHold) or 0.06, 0, 0.5)
-            local between = math.clamp(tonumber(cfg.BetweenDelay) or 0.12, 0, 2)
-            for _, name in ipairs(cfg.Order) do
-                if not running or charOf(LocalPlayer) ~= character or hum.Health <= 0 then
-                    weaponSwitchLastError = "Sequencia interrompida: personagem mudou"
-                    break
-                end
-                local tool = findWeapon(tostring(name), backpack, character)
-                if not tool then
-                    weaponSwitchLastSkipped = weaponSwitchLastSkipped + 1
-                    warn("[V4ware WS] Arma nao encontrada: " .. tostring(name))
-                elseif cfg.SkipEmpty and weaponAmmoEmpty(tool) then
-                    weaponSwitchLastSkipped = weaponSwitchLastSkipped + 1
-                    warn("[V4ware WS] Sem municao: " .. tostring(name))
-                else
-                    if tool.Parent ~= character then
-                        local equipOk = pcall(function() hum:EquipTool(tool) end)
-                        if not equipOk then
-                            weaponSwitchLastSkipped = weaponSwitchLastSkipped + 1
-                            warn("[V4ware WS] Falha ao equipar: " .. tostring(name))
-                        end
-                    end
-                    task.wait(equipDelay)
-                    if running and tool.Parent == character then
-                        local fireOk, fireErr = pcall(function() tool:Activate() end)
-                        if fireOk then
-                            weaponSwitchLastAttempts = weaponSwitchLastAttempts + 1
-                            print("[V4ware WS] Ativacao solicitada: " .. tostring(name))
-                        else
-                            weaponSwitchLastSkipped = weaponSwitchLastSkipped + 1
-                            weaponSwitchLastError = tostring(fireErr)
-                            warn("[V4ware WS] Erro em Activate: " .. tostring(fireErr))
-                        end
-                        if shotHold > 0 then task.wait(shotHold) end
-                        pcall(function() tool:Deactivate() end)
-                    else
-                        weaponSwitchLastSkipped = weaponSwitchLastSkipped + 1
-                        warn("[V4ware WS] A arma nao ficou equipada: " .. tostring(name))
-                    end
-                    if between > 0 then task.wait(between) end
-                end
-            end
-            if running and cfg.RestorePrevious and original and original.Parent and
-                charOf(LocalPlayer) == character and hum.Health > 0 then
-                pcall(function() hum:EquipTool(original) end)
-            end
-        end)
-        if not ok then weaponSwitchLastError = tostring(err) end
-        weaponSwitchLastResult = ("%d ativacao(oes) solicitada(s); %d ignorada(s)")
-            :format(weaponSwitchLastAttempts, weaponSwitchLastSkipped)
-        print("[V4ware WS] " .. weaponSwitchLastResult)
-        if weaponSwitchLastError then warn("[V4ware WS] " .. weaponSwitchLastError) end
-        weaponSwitchBusy = false
-    end)
-end
-
-local function tp(position)
-    local root = rootOf(charOf(LocalPlayer))
-    if root then root.CFrame = CFrame.new(position) end
-end
-
-local function rageAction(input)
-    if not Config.Rage.Enabled then return false end
-    local cfg = Config.Rage
-    for _, item in pairs(cfg.Teleports) do
-        if pressed(input, item.Key) then tp(item.Position) return true end
-    end
-    if pressed(input, cfg.SkyReset.Key) then
-        local root = rootOf(charOf(LocalPlayer))
-        if root then tp(root.Position + Vector3.new(0, cfg.SkyReset.SkyHeight, 0)) end
-        return true
-    end
-    if pressed(input, cfg.TeleportToTarget.Key) then
-        local target = camTarget or findCamTarget()
-        local root = target and rootOf(charOf(target))
-        if root then tp(root.Position + Vector3.new(2, 0, 0)) end
-        return true
-    end
-    return false
-end
-
--- =============================================================
--- PULO V14: RESTAURACAO PROATIVA + CONTATO ESTRITO DOS PES
--- =============================================================
--- Um comando de Espaco = no maximo UM pedido de salto.
--- Nada de velocidade adicional, gravidade, CFrame, impulso no ar ou voo.
--- Se apertar Espaco enquanto estiver no ar, esse pedido e DESCARTADO.
--- Nenhum salto e armazenado para executar automaticamente na aterrissagem.
--- Nao remove restricoes que sejam impostas pelo servidor.
-local jumpKeyLatched = false
-local groundJumpCount = 0
-local groundJumpConfirmed = 0
-local jumpStateWasDisabled = 0
-local restoredJumpPower = 0
-local proactivePowerRestores = 0
-local proactiveStateRestores = 0
-local lastRecoveryReason = "sem bloqueio observado"
-local nextNativeRecovery = 0
-local recoveryReentry = false
-local jumpInputCount = 0
-local jumpBufferedCount = 0
-local jumpBufferedExecuted = 0
-local jumpBufferedExpired = 0
-local nativeDeniedCount = 0
-local attemptedJumpAt = 0
-local attemptedJumpHum = nil
-local observedThisAttempt = false
-local checkedThisAttempt = true
-local baselineHumanoid = nil
-local baselinePower = nil
-local baselineHeight = nil
-local lastJumpResult = "Nenhuma tentativa"
-local pendingJumpUntil = 0
-local pendingJumpHum = nil
-local lastFloorMethod = "nao testado"
-local feetContactFrames = 0
-local feetStable = false
-local feetContactName = "nenhum"
-local jumpConsumedThisLanding = false
-local hasLeftGroundSinceJump = false
-local lastGroundRequestedAt = 0
-local airJumpIgnored = 0
-
-local function observeHumanoid(hum)
-    if not hum or hum == baselineHumanoid then return end
-    baselineHumanoid = hum
-    -- Registrar a altura NORMAL da propria sessao. Nunca aumentar acima do inicial.
-    local currentPower, currentHeight = hum.JumpPower, hum.JumpHeight
-    baselinePower = (currentPower and currentPower > 0) and currentPower or baselinePower
-    baselineHeight = (currentHeight and currentHeight > 0) and currentHeight or baselineHeight
-    attemptedJumpAt, attemptedJumpHum = 0, nil
-    checkedThisAttempt = true
-    observedThisAttempt = false
-    pendingJumpUntil, pendingJumpHum = 0, nil
-    feetContactFrames = 0
-    feetStable = false
-    feetContactName = "nenhum"
-    jumpConsumedThisLanding = false
-    hasLeftGroundSinceJump = false
-    lastGroundRequestedAt = 0
-    local conn = hum.StateChanged:Connect(function(_, newState)
-        if not running then return end
-        if newState == Enum.HumanoidStateType.Jumping then
-            if attemptedJumpHum == hum and not observedThisAttempt then
-                observedThisAttempt = true
-                groundJumpConfirmed = groundJumpConfirmed + 1
-                lastJumpResult = "Salto nativo observado"
-            end
-        end
-    end)
-    table.insert(connections, conn)
-    -- O cooldown pode reduzir JumpPower para ZERO depois de tres pulos.
-    -- Vigiar a propriedade evita depender de outra tecla ou do detector de chao.
-    local function onPowerChanged()
-        if not running or hum ~= baselineHumanoid or recoveryReentry then return end
-        if hum.UseJumpPower and baselinePower and baselinePower > 0 and hum.JumpPower <= 0 then
-            recoveryReentry = true
-            local ok = pcall(function() hum.JumpPower = baselinePower end)
-            recoveryReentry = false
-            if ok then
-                restoredJumpPower = restoredJumpPower + 1
-                proactivePowerRestores = proactivePowerRestores + 1
-                lastRecoveryReason = "JumpPower zerado: restaurado ao valor inicial"
-            end
-        end
-    end
-    local function onHeightChanged()
-        if not running or hum ~= baselineHumanoid or recoveryReentry then return end
-        if not hum.UseJumpPower and baselineHeight and baselineHeight > 0 and hum.JumpHeight <= 0 then
-            recoveryReentry = true
-            local ok = pcall(function() hum.JumpHeight = baselineHeight end)
-            recoveryReentry = false
-            if ok then
-                restoredJumpPower = restoredJumpPower + 1
-                proactivePowerRestores = proactivePowerRestores + 1
-                lastRecoveryReason = "JumpHeight zerado: restaurado ao valor inicial"
-            end
-        end
-    end
-    table.insert(connections, hum:GetPropertyChangedSignal("JumpPower"):Connect(onPowerChanged))
-    table.insert(connections, hum:GetPropertyChangedSignal("JumpHeight"):Connect(onHeightChanged))
-    -- Nao impomos nem gravidade nem velocidades; somente recuperamos o salto do Humanoid.
-    onPowerChanged()
-    onHeightChanged()
-end
-
--- A detecao antiga aceitava FloorMaterial (que pode ficar desatualizado)
--- ou um raycast do quadril proximo do solo. Essa verificacao usa as SOLAS.
-local function isGrounded(hum)
-    lastFloorMethod = "ar / sem apoio dos pes"
-    feetContactName = "nenhum"
-    if not hum or hum.Health <= 0 or hum.Sit then return false end
-    local state = hum:GetState()
-    -- Em Jumping, Freefall e outros estados aereos NUNCA tentamos reiniciar salto.
-    if state ~= Enum.HumanoidStateType.Running
-        and state ~= Enum.HumanoidStateType.RunningNoPhysics
-        and state ~= Enum.HumanoidStateType.Landed then
-        lastFloorMethod = "estado nao apoiado: " .. tostring(state)
-        return false
-    end
-    local character = hum.Parent
-    local root = rootOf(character)
-    if not root then return false end
-    -- Durante subida ou queda significativa nao ha aterrissagem confirmada.
-    local vy = root.AssemblyLinearVelocity.Y
-    if vy > 1.25 or vy < -3 then
-        lastFloorMethod = "movimento vertical sem pouso: " .. string.format("%.2f", vy)
-        return false
-    end
-
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {character}
-    params.IgnoreWater = true
-    pcall(function() params.RespectCanCollide = true end)
-    local feet
-    if hum.RigType == Enum.HumanoidRigType.R15 then
-        feet = {"LeftFoot", "RightFoot"}
-    else
-        feet = {"Left Leg", "Right Leg"}
-    end
-    local gapLimit = math.clamp(tonumber(Config.Movement.GroundRayTolerance) or 0.10, 0.03, 0.12)
-    for _, partName in ipairs(feet) do
-        local foot = character:FindFirstChild(partName)
-        if foot and foot:IsA("BasePart") then
-            -- Altura mais baixa da caixa orientada: considera rotacao da perna/pe.
-            local cf, size = foot.CFrame, foot.Size
-            local halfVertical = (math.abs(cf.RightVector.Y)*size.X
-                + math.abs(cf.UpVector.Y)*size.Y
-                + math.abs(cf.LookVector.Y)*size.Z) * 0.5
-            local soleY = foot.Position.Y - halfVertical
-            local rayStart = foot.Position + Vector3.new(0, 0.15, 0)
-            local distance = (rayStart.Y - soleY) + gapLimit
-            local hit = Workspace:Raycast(rayStart, Vector3.new(0, -distance, 0), params)
-            if hit and hit.Instance and hit.Instance:IsA("BasePart") and hit.Instance.CanCollide then
-                local gap = soleY - hit.Position.Y
-                -- O pe precisa de fato tocar o piso: nao basta estar perto dele.
-                if gap >= -0.08 and gap <= gapLimit then
-                    feetContactName = partName
-                    lastFloorMethod = "sola apoiada: " .. partName .. " (gap=" .. string.format("%.3f", gap) .. ")"
-                    return true
-                end
-            end
-        end
-    end
-    return false
-end
-
--- Acompanha o pouso antes de autorizar UM novo salto.
--- So rearma quando o personagem realmente saiu do chao e voltou a tocar.
-local function updateFootContact()
-    local hum = humanoidOf(charOf(LocalPlayer))
-    if not hum then
-        feetContactFrames, feetStable = 0, false
-        return
-    end
-    observeHumanoid(hum)
-    local contact = isGrounded(hum)
-    if contact then
-        feetContactFrames = math.min(30, feetContactFrames + 1)
-        local required = math.clamp(math.floor(tonumber(Config.Movement.GroundStableFrames) or 2), 2, 5)
-        feetStable = feetContactFrames >= required
-        if jumpConsumedThisLanding and hasLeftGroundSinceJump and feetStable then
-            jumpConsumedThisLanding = false
-            hasLeftGroundSinceJump = false
-        elseif jumpConsumedThisLanding and not hasLeftGroundSinceJump
-            and feetStable and os.clock() - lastGroundRequestedAt >= 0.35 then
-            -- Pedido rejeitado pelo jogo: permite nova tentativa no chao.
-            jumpConsumedThisLanding = false
-        end
-    else
-        feetContactFrames, feetStable = 0, false
-        if jumpConsumedThisLanding then hasLeftGroundSinceJump = true end
-    end
-end
-
-local function maintainNativeJump()
-    if not running or not Config.Movement["No Jump Cooldown"] then return end
-    local now = os.clock()
-    if now < nextNativeRecovery then return end
-    nextNativeRecovery = now + 0.06
-    local hum = humanoidOf(charOf(LocalPlayer))
-    if not hum or hum.Health <= 0 then return end
-    observeHumanoid(hum)
-    -- O valor normal do pulo pode ser bloqueado tanto por propriedade quanto por estado.
-    -- Recuperar somente valores zerados, sem aumento da altura e sem impulso no ar.
-    if hum.UseJumpPower and baselinePower and baselinePower > 0 and hum.JumpPower <= 0 then
-        if pcall(function() hum.JumpPower = baselinePower end) then
-            restoredJumpPower = restoredJumpPower + 1
-            proactivePowerRestores = proactivePowerRestores + 1
-            lastRecoveryReason = "JumpPower restaurado (verificacao periodica)"
-        end
-    elseif (not hum.UseJumpPower) and baselineHeight and baselineHeight > 0 and hum.JumpHeight <= 0 then
-        if pcall(function() hum.JumpHeight = baselineHeight end) then
-            restoredJumpPower = restoredJumpPower + 1
-            proactivePowerRestores = proactivePowerRestores + 1
-            lastRecoveryReason = "JumpHeight restaurado (verificacao periodica)"
-        end
-    end
-    -- Somente reabilitar Jumping no chao; nunca iniciar um novo salto automaticamente.
-    if isGrounded(hum) then
-        local ok, enabled = pcall(function()
-            return hum:GetStateEnabled(Enum.HumanoidStateType.Jumping)
-        end)
-        if ok and enabled == false then
-            local restored = pcall(function()
-                hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
-            end)
-            if restored then
-                jumpStateWasDisabled = jumpStateWasDisabled + 1
-                proactiveStateRestores = proactiveStateRestores + 1
-                lastRecoveryReason = "Estado Jumping bloqueado: reabilitado no chao"
-            end
-        end
-    end
-end
-
-local function nativeJump(hum)
-    if not running or not hum or jumpConsumedThisLanding or not feetStable or not isGrounded(hum) then
-        return false
-    end
-    local okEnabled, stateEnabled = pcall(function()
-        return hum:GetStateEnabled(Enum.HumanoidStateType.Jumping)
-    end)
-    if okEnabled and stateEnabled == false then
-        local restored = pcall(function()
-            hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
-        end)
-        if restored then jumpStateWasDisabled = jumpStateWasDisabled + 1 end
-    end
-    if hum.UseJumpPower and baselinePower and baselinePower > 0 and hum.JumpPower <= 0 then
-        local restored = pcall(function() hum.JumpPower = baselinePower end)
-        if restored then restoredJumpPower = restoredJumpPower + 1 end
-    elseif not hum.UseJumpPower and baselineHeight and baselineHeight > 0 and hum.JumpHeight <= 0 then
-        local restored = pcall(function() hum.JumpHeight = baselineHeight end)
-        if restored then restoredJumpPower = restoredJumpPower + 1 end
-    end
-    pendingJumpUntil, pendingJumpHum = 0, nil
-    jumpConsumedThisLanding = true
-    hasLeftGroundSinceJump = false
-    lastGroundRequestedAt = os.clock()
-    feetStable = false
-    feetContactFrames = 0
-    groundJumpCount = groundJumpCount + 1
-    attemptedJumpHum = hum
-    attemptedJumpAt = os.clock()
-    observedThisAttempt = false
-    checkedThisAttempt = false
-    lastJumpResult = "Pedido de salto nativo enviado no chao"
-    -- Nenhuma forca propria: a altura permanece a definida pelo Humanoid.
-    hum.Jump = true
-    local ok = pcall(function()
-        hum:ChangeState(Enum.HumanoidStateType.Jumping)
-    end)
-    if not ok then lastJumpResult = "ChangeState nao aceito pelo cliente" end
-    return true
-end
-
-local function onJumpRequest()
-    if not running or not Config.Movement["No Jump Cooldown"] then return end
-    local hum = humanoidOf(charOf(LocalPlayer))
-    if not hum then return end
-    observeHumanoid(hum)
-    jumpInputCount = jumpInputCount + 1
-    if feetStable and not jumpConsumedThisLanding and isGrounded(hum) then
-        if not nativeJump(hum) then
-            lastJumpResult = "Pedido nao aceito: sem apoio confirmado"
-        end
-    else
-        -- IMPORTANTISSIMO: nada de buffer; pedido no ar nao gera salto futuro.
-        airJumpIgnored = airJumpIgnored + 1
-        lastJumpResult = "Ignorado: pes sem apoio estavel no chao"
-    end
-end
-
-local function processJumpBuffer()
-    -- V14: intencionalmente vazio. Nao agenda nenhum salto automatico.
-    if not checkedThisAttempt and attemptedJumpAt > 0
-        and os.clock() - attemptedJumpAt > 0.22 then
-        checkedThisAttempt = true
-        if not observedThisAttempt then
-            nativeDeniedCount = nativeDeniedCount + 1
-            lastJumpResult = "Salto nao confirmado pelo estado Jumping"
-        end
-    end
-end
-
--- Deduplicacao: InputBegan e JumpRequest podem chegar no mesmo pressionamento.
-local function keyboardJump(input, processed)
-    if processed or input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-    local cfg = Config.Movement.InfiniteJump
-    if not cfg or not pressed(input, cfg.Key or "Space") or jumpKeyLatched then return end
-    jumpKeyLatched = true
-    onJumpRequest()
-end
-
-local function jumpRequest()
-    local cfg = Config.Movement.InfiniteJump
-    if cfg and UserInputService.KeyboardEnabled then
-        local key = Enum.KeyCode[tostring(cfg.Key or "Space")]
-        if key and UserInputService:IsKeyDown(key) then
-            if jumpKeyLatched then return end
-            jumpKeyLatched = true
-        end
-    end
-    onJumpRequest()
-end
-
-connectSignal(LocalPlayer.CharacterAdded, function(ch)
-    jumpKeyLatched = false
-    local hum = ch:WaitForChild("Humanoid", 10)
-    if running and hum then observeHumanoid(hum) end
-end)
-observeHumanoid(humanoidOf(charOf(LocalPlayer)))
-
-local function updateAutoReset()
-    if not Config.AutoReset.Enabled or os.clock() < nextReset then return end
-    nextReset = os.clock() + 2
-    local character = charOf(LocalPlayer)
-    if knocked(character) then
-        local hum = humanoidOf(character)
-        if hum then pcall(function() hum.Health = 0 end) end
-    end
-end
-
--- =============================================================
--- INPUT, LOOP, CONTROLE E STATUS
--- =============================================================
-connectSignal(UserInputService.InputBegan, function(input, processed)
-    if input.UserInputType == Enum.UserInputType.MouseButton2 then
-        rightMouseHeld = true
-        return
-    end
-    if processed then return end
-    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-    keyboardJump(input, processed)
-    if Config.Triggerbot.Enabled and pressed(input, Config.Triggerbot.Key) then
-        if Config.Triggerbot.Type == "Toggle" then
-            triggerActive = not triggerActive
-        else
-            triggerActive = true
-        end
-    end
-    if rageAction(input) then return end
-    if pressed(input, Config.ESP.Key) then
-        espActive = not espActive
-        refreshESP()
-    end
-    if pressed(input, Config.Camlock.Key) then
-        camActive = not camActive
-        camTarget = camActive and findCamTarget() or nil
-    end
-    local wsCfg = weaponSwitchConfig()
-    if wsCfg.Enabled and pressed(input, wsCfg.Key or "V") then
-        requestWeaponSwitch()
-        return
-    end
-    if pressed(input, Config.InventorySorter.Key) then sortInventory() end
-    if pressed(input, Config.AutoSwitch.Key) then autoSwitch() end
-end)
-
-connectSignal(UserInputService.InputEnded, function(input)
-    if input.UserInputType == Enum.UserInputType.Keyboard then
-        local cfg = Config.Movement.InfiniteJump
-        if cfg and pressed(input, cfg.Key or "Space") then jumpKeyLatched = false end
-    end
-    if input.UserInputType == Enum.UserInputType.MouseButton2 then rightMouseHeld = false end
-    if pressed(input, Config.Triggerbot.Key) and Config.Triggerbot.Type ~= "Toggle" then
-        triggerActive = false
-    end
-end)
-
-connectSignal(UserInputService.JumpRequest, jumpRequest)
-connectSignal(Players.PlayerRemoving, clearESP)
-
-connectSignal(RunService.RenderStepped, function(dt)
-    if not running then return end
-    updateCam(dt)
-    updateTrigger()
-end)
-
-connectSignal(RunService.Heartbeat, function()
-    if not running then return end
-    local now = os.clock()
-    if now >= nextESP then
-        nextESP = now + 0.4
-        refreshESP()
-    end
-    if now >= nextHitbox then
-        nextHitbox = now + math.max(0.05, tonumber(Config.HitboxExpander.RefreshTime) or 1)
-        updateHitboxes()
-    end
-    if now >= nextSpread then
-        nextSpread = now + math.max(3, tonumber(Config.SpreadModification.RefreshTime) or 6)
-        updateSpread()
-    end
-    updateFootContact()
-    maintainNativeJump()
-    processJumpBuffer()
-    updateAutoReset()
-end)
-
-local function status()
-    local localMatches = {}
-    for name, count in pairs(spreadMatches) do localMatches[name] = count end
-    return {
-        Version = 20,
-        Running = running,
-        InfiniteJump = false,
-        NoJumpCooldown = Config.Movement["No Jump Cooldown"],
-        GroundJumpsRequested = groundJumpCount,
-        GroundJumpsStateConfirmed = groundJumpConfirmed,
-        JumpStateReenabled = jumpStateWasDisabled,
-        JumpPowerBaselineRestored = restoredJumpPower,
-        JumpProactivePowerRestores = proactivePowerRestores,
-        JumpProactiveStateRestores = proactiveStateRestores,
-        JumpRecoveryReason = lastRecoveryReason,
-        JumpBaselinePower = baselinePower,
-        JumpBaselineHeight = baselineHeight,
-        JumpStateEnabled = (function()
-            local hum = humanoidOf(charOf(LocalPlayer))
-            if not hum then return nil end
-            local ok, enabled = pcall(function() return hum:GetStateEnabled(Enum.HumanoidStateType.Jumping) end)
-            return ok and enabled or nil
-        end)(),
-        JumpLastResult = lastJumpResult,
-        JumpInputPresses = jumpInputCount,
-        JumpBuffered = jumpBufferedCount,
-        JumpBufferedExecuted = jumpBufferedExecuted,
-        JumpBufferedExpired = jumpBufferedExpired,
-        JumpPending = pendingJumpUntil > os.clock(),
-        JumpGroundDetection = lastFloorMethod,
-        JumpFootContact = feetContactName,
-        JumpGroundFrames = feetContactFrames,
-        JumpGroundStable = feetStable,
-        JumpConsumedThisLanding = jumpConsumedThisLanding,
-        JumpAirRequestsIgnored = airJumpIgnored,
-        JumpNativeNotConfirmed = nativeDeniedCount,
-        JumpCurrentPower = (function()
-            local hum = humanoidOf(charOf(LocalPlayer))
-            return hum and hum.JumpPower or nil
-        end)(),
-        JumpCurrentFloor = (function()
-            local hum = humanoidOf(charOf(LocalPlayer))
-            return hum and tostring(hum.FloorMaterial) or "sem humanoide"
-        end)(),
-        JumpCurrentState = (function()
-            local hum = humanoidOf(charOf(LocalPlayer))
-            return hum and tostring(hum:GetState()) or "sem humanoide"
-        end)(),
-        TriggerFireDelay = Config.Triggerbot.FireDelay,
-        TriggerRange = Config.Triggerbot["Range-Check"].Data,
-        TriggerMaxRange = Config.Triggerbot["Range-Check"].HardCap,
-        Triggerbot = Config.Triggerbot.Enabled and triggerActive,
-        ESP = Config.ESP.Enabled and espActive,
-        Camlock = Config.Camlock.Enabled and camActive,
-        CamTarget = camTarget and camTarget.Name or nil,
-        WhitelistCount = (function() local n=0; for _ in pairs(Config.Triggerbot.Whitelist.List) do n=n+1 end; return n end)(),
-        Spectating = spectateTarget and spectateTarget.Name or nil,
-        HitboxExpander = Config.HitboxExpander.Enabled,
-        SpreadConfigured = Config.SpreadModification.Guns,
-        SpreadRuntimeConstantsPatched = localMatches,
-        SpreadScanAttempted = spreadAttempted,
-        SpreadCandidatesSeen = spreadCandidatesSeen,
-        SpreadLastError = spreadLastError,
-        WeaponSwitchEnabled = weaponSwitchConfig().Enabled,
-        WeaponSwitchKey = weaponSwitchConfig().Key,
-        WeaponSwitchBusy = weaponSwitchBusy,
-        WeaponSwitchLastAttempts = weaponSwitchLastAttempts,
-        WeaponSwitchLastSkipped = weaponSwitchLastSkipped,
-        WeaponSwitchLastResult = weaponSwitchLastResult,
-        WeaponSwitchLastError = weaponSwitchLastError,
-        SpreadRealVerified = false, -- validacao de dano/trajetoria do servidor nao foi testada
-        RemoteHooks = false,
-    }
-end
-
-
--- =============================================================
--- V4WARE V20 PREMIUM HUB
--- Interface redesenhada sobre a base V19; modulos principais preservados.
--- =============================================================
-local menuGui, menuPanel, menuPlayers, menuCount, tabWhitelist, tabIncognito, tabSystem, monitorFrame
-local panelScale
-local selectedTab = "overview"
-local selectedPlayerTab = "whitelist"
-local menuVisible = false
-local renderMenu
-local updateSystemMonitor
-local refreshDashboard
-local monitorValues = {}
-local currentFPS = 0
-local fpsFrameCount, fpsElapsed = 0, 0
-local monitorRefreshElapsed = 0
-local dashboardRefreshElapsed = 0
-local monitorEnabled = true
-local compactMode = false
-local panelKey = Enum.KeyCode.Insert
-local accentColor = Color3.fromRGB(160, 190, 222)
-local accentChoices = {
-    Color3.fromRGB(160, 190, 222),
-    Color3.fromRGB(139, 202, 178),
-    Color3.fromRGB(180, 166, 225),
+local Theme = {
+    Background = Color3.fromRGB(11, 13, 17),
+    Header = Color3.fromRGB(16, 19, 24),
+    Sidebar = Color3.fromRGB(16, 19, 24),
+    Panel = Color3.fromRGB(20, 24, 30),
+    Card = Color3.fromRGB(25, 30, 37),
+    CardHover = Color3.fromRGB(31, 37, 45),
+    Border = Color3.fromRGB(44, 51, 61),
+    Text = Color3.fromRGB(239, 243, 248),
+    Muted = Color3.fromRGB(139, 149, 163),
+    Dim = Color3.fromRGB(94, 105, 120),
+    Accent = Color3.fromRGB(155, 190, 225),
+    Green = Color3.fromRGB(111, 207, 151),
+    Red = Color3.fromRGB(224, 119, 119),
+    Amber = Color3.fromRGB(226, 185, 112),
 }
-local accentIndex = 1
 
-local function restoreOwnCamera()
-    local cam = camera()
-    if not cam then return end
-    local char = charOf(LocalPlayer)
-    local hum = humanoidOf(char)
-    local previous = spectateOldSubject
-    if hum then
-        cam.CameraType = spectateOldType or Enum.CameraType.Custom
-        cam.CameraSubject = (previous and previous.Parent and previous) or hum
-    else
-        cam.CameraType = Enum.CameraType.Custom
+local AccentOptions = {
+    Ice = Color3.fromRGB(155, 190, 225),
+    Mint = Color3.fromRGB(135, 205, 178),
+    Violet = Color3.fromRGB(177, 164, 222),
+}
+
+local Settings = {
+    OpenKey = Enum.KeyCode.Insert,
+    Compact = false,
+    AccentName = "Ice",
+    HitboxEnabled = false,
+    HitboxX = 1.50,
+    HitboxY = 1.50,
+    HitboxZ = 1.25,
+    HitboxTransparency = 0.50,
+    HitboxColor = Color3.fromRGB(125, 185, 235),
+}
+
+local function create(className, parent, properties)
+    local object = Instance.new(className)
+    for key, value in pairs(properties or {}) do
+        object[key] = value
     end
+    object.Parent = parent
+    return object
 end
 
-local function stopSpectating()
-    if not spectateTarget then return end
-    spectateTarget = nil
-    restoreOwnCamera()
-    spectateOldSubject, spectateOldType = nil, nil
+local function addCorner(parent, radius)
+    create("UICorner", parent, {
+        CornerRadius = UDim.new(0, radius or 10),
+    })
 end
 
-local function startSpectating(player)
-    if spectateTarget == player then
-        stopSpectating()
+local function addStroke(parent, color, transparency)
+    create("UIStroke", parent, {
+        Color = color or Theme.Border,
+        Transparency = transparency or 0,
+        Thickness = 1,
+    })
+end
+
+local function tween(object, properties, duration)
+    if not object or not object.Parent then
         return
     end
-    local targetHum = humanoidOf(charOf(player))
-    if not targetHum then
-        warn("[V4ware] Jogador sem personagem disponivel para visualizar.")
-        return
-    end
-    if not spectateTarget then
-        local cam = camera()
-        spectateOldSubject = cam and cam.CameraSubject or nil
-        spectateOldType = cam and cam.CameraType or nil
-    end
-    spectateTarget = player
-    local cam = camera()
-    if cam then
-        cam.CameraType = Enum.CameraType.Custom
-        cam.CameraSubject = targetHum
-    end
+    local info = TweenInfo.new(duration or 0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local animation = TweenService:Create(object, info, properties)
+    animation:Play()
+    return animation
 end
 
-local function uiNew(className, props, parent)
-    local obj = Instance.new(className)
-    for key, value in pairs(props or {}) do obj[key] = value end
-    obj.Parent = parent
-    return obj
-end
-
-local function uiText(parent, txt, props)
-    local p = {
-        Text = txt,
+local function makeLabel(parent, value, position, size, fontSize, color, font, alignment)
+    return create("TextLabel", parent, {
         BackgroundTransparency = 1,
-        Font = Enum.Font.Gotham,
-        TextSize = 12,
-        TextColor3 = Color3.fromRGB(224, 229, 237),
-        TextXAlignment = Enum.TextXAlignment.Left,
+        Position = position,
+        Size = size,
+        Text = value,
+        Font = font or Enum.Font.Gotham,
+        TextSize = fontSize or 12,
+        TextColor3 = color or Theme.Text,
+        TextXAlignment = alignment or Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Center,
-        BorderSizePixel = 0,
         TextTruncate = Enum.TextTruncate.AtEnd,
-    }
-    for k, v in pairs(props or {}) do p[k] = v end
-    return uiNew("TextLabel", p, parent)
+    })
 end
 
--- Hover motion: tweens event-driven (sem loop por frame), com escala e realce discretos.
-local HOVER_IN = TweenInfo.new(0.14, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-local HOVER_OUT = TweenInfo.new(0.17, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local PAGE_IN = TweenInfo.new(0.16, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-
-local function playUiTween(target, info, properties)
-    if not target or not target.Parent then return nil end
-    local ok, tween = pcall(function()
-        return TweenService:Create(target, info, properties)
-    end)
-    if ok and tween then
-        tween:Play()
-        return tween
-    end
-    return nil
-end
-
-local function addHoverMotion(guiObject, options)
-    options = options or {}
-    if not guiObject or not guiObject:IsA("GuiObject") then return end
-
-    local scale = uiNew("UIScale", {Scale = 1}, guiObject)
-    local stroke = guiObject:FindFirstChildOfClass("UIStroke")
-    local baseBackground = guiObject.BackgroundColor3
-    local baseTransparency = guiObject.BackgroundTransparency
-    local baseTextColor = guiObject:IsA("TextButton") and guiObject.TextColor3 or nil
-    local baseStrokeColor = stroke and stroke.Color or nil
-    local baseStrokeThickness = stroke and stroke.Thickness or nil
-    local hoverScale = options.Scale or 1.025
-    local blend = options.Blend or 0.10
-
-    guiObject.MouseEnter:Connect(function()
-        playUiTween(scale, HOVER_IN, {Scale = hoverScale})
-
-        local enterProperties = {}
-        if baseTransparency < 1 and options.Background ~= false then
-            enterProperties.BackgroundColor3 = baseBackground:Lerp(accentColor, blend)
-        end
-        if baseTextColor then
-            enterProperties.TextColor3 = baseTextColor:Lerp(Color3.fromRGB(255, 255, 255), 0.14)
-        end
-        if next(enterProperties) then
-            playUiTween(guiObject, HOVER_IN, enterProperties)
-        end
-        if stroke then
-            playUiTween(stroke, HOVER_IN, {
-                Color = accentColor,
-                Thickness = math.max(baseStrokeThickness or 1, 1.35),
-            })
-        end
-    end)
-
-    guiObject.MouseLeave:Connect(function()
-        playUiTween(scale, HOVER_OUT, {Scale = 1})
-
-        local leaveProperties = {}
-        if baseTransparency < 1 and options.Background ~= false then
-            leaveProperties.BackgroundColor3 = baseBackground
-        end
-        if baseTextColor then
-            leaveProperties.TextColor3 = baseTextColor
-        end
-        if next(leaveProperties) then
-            playUiTween(guiObject, HOVER_OUT, leaveProperties)
-        end
-        if stroke then
-            playUiTween(stroke, HOVER_OUT, {
-                Color = baseStrokeColor,
-                Thickness = baseStrokeThickness,
-            })
-        end
-    end)
-end
-
-local function uiButton(parent, txt, props)
-    local p = {
-        Text = txt,
-        BackgroundColor3 = Color3.fromRGB(29, 33, 40),
+local function makeButton(parent, value, position, size, accent)
+    local button = create("TextButton", parent, {
+        AutoButtonColor = false,
+        BackgroundColor3 = Theme.Card,
         BorderSizePixel = 0,
+        Position = position,
+        Size = size,
+        Text = value,
         Font = Enum.Font.GothamMedium,
         TextSize = 11,
-        TextColor3 = Color3.fromRGB(226, 231, 239),
-        AutoButtonColor = false,
-    }
-    for k, v in pairs(props or {}) do p[k] = v end
-    local button = uiNew("TextButton", p, parent)
-    uiNew("UICorner", {CornerRadius = UDim.new(0, 8)}, button)
-    uiNew("UIStroke", {Color = Color3.fromRGB(47, 54, 64), Thickness = 1}, button)
-    addHoverMotion(button, {Scale = 1.035, Blend = 0.18})
+        TextColor3 = Theme.Text,
+    })
+    addCorner(button, 8)
+    addStroke(button)
+
+    local normalColor = Theme.Card
+    local hoverColor = accent and Color3.fromRGB(37, 47, 59) or Theme.CardHover
+
+    button.MouseEnter:Connect(function()
+        tween(button, {
+            BackgroundColor3 = hoverColor,
+            Size = size + UDim2.fromOffset(2, 2),
+            Position = position - UDim2.fromOffset(1, 1),
+        }, 0.12)
+    end)
+
+    button.MouseLeave:Connect(function()
+        tween(button, {
+            BackgroundColor3 = normalColor,
+            Size = size,
+            Position = position,
+        }, 0.12)
+    end)
+
     return button
 end
 
-local function uiCard(parent, name, position, size)
-    local card = uiNew("Frame", {
+local ScreenGui = create("ScreenGui", PlayerGui, {
+    Name = GUI_NAME,
+    ResetOnSpawn = false,
+    IgnoreGuiInset = true,
+    DisplayOrder = 55,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+})
+
+local Main = create("Frame", ScreenGui, {
+    Name = "Main",
+    AnchorPoint = Vector2.new(0.5, 0.5),
+    Position = UDim2.fromScale(0.5, 0.5),
+    Size = UDim2.fromOffset(760, 520),
+    BackgroundColor3 = Theme.Background,
+    BorderSizePixel = 0,
+})
+addCorner(Main, 16)
+addStroke(Main)
+
+create("UISizeConstraint", Main, {
+    MinSize = Vector2.new(620, 440),
+    MaxSize = Vector2.new(900, 650),
+})
+
+-- Header
+local Header = create("Frame", Main, {
+    Name = "Header",
+    Size = UDim2.new(1, 0, 0, 70),
+    BackgroundColor3 = Theme.Header,
+    BorderSizePixel = 0,
+})
+addCorner(Header, 16)
+create("Frame", Header, {
+    Position = UDim2.new(0, 0, 1, -14),
+    Size = UDim2.new(1, 0, 0, 14),
+    BackgroundColor3 = Theme.Header,
+    BorderSizePixel = 0,
+})
+
+local Logo = create("Frame", Header, {
+    Position = UDim2.fromOffset(19, 16),
+    Size = UDim2.fromOffset(38, 38),
+    BackgroundColor3 = Theme.CardHover,
+    BorderSizePixel = 0,
+})
+addCorner(Logo, 11)
+addStroke(Logo)
+local LogoText = makeLabel(Logo, "V4", UDim2.fromScale(0, 0), UDim2.fromScale(1, 1), 13, Theme.Accent, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+
+makeLabel(Header, "V4ware", UDim2.fromOffset(68, 13), UDim2.fromOffset(170, 25), 19, Theme.Text, Enum.Font.GothamSemibold)
+makeLabel(Header, "STUDIO QA  •  CLEAN CONTROL CENTER", UDim2.fromOffset(69, 38), UDim2.fromOffset(260, 15), 9, Theme.Muted, Enum.Font.GothamMedium)
+
+local ReadyPill = create("Frame", Header, {
+    Position = UDim2.new(1, -150, 0, 23),
+    Size = UDim2.fromOffset(72, 24),
+    BackgroundColor3 = Color3.fromRGB(24, 43, 36),
+    BorderSizePixel = 0,
+})
+addCorner(ReadyPill, 12)
+local ReadyDot = create("Frame", ReadyPill, {
+    Position = UDim2.fromOffset(9, 8),
+    Size = UDim2.fromOffset(7, 7),
+    BackgroundColor3 = Theme.Green,
+    BorderSizePixel = 0,
+})
+addCorner(ReadyDot, 8)
+makeLabel(ReadyPill, "READY", UDim2.fromOffset(22, 0), UDim2.new(1, -24, 1, 0), 9, Theme.Green, Enum.Font.GothamBold)
+
+local MinimizeButton = makeButton(Header, "–", UDim2.new(1, -69, 0, 21), UDim2.fromOffset(28, 28))
+MinimizeButton.TextSize = 16
+local CloseButton = makeButton(Header, "×", UDim2.new(1, -35, 0, 21), UDim2.fromOffset(28, 28))
+CloseButton.TextSize = 17
+
+-- Main body and sidebar
+local Body = create("Frame", Main, {
+    Position = UDim2.fromOffset(0, 70),
+    Size = UDim2.new(1, 0, 1, -70),
+    BackgroundTransparency = 1,
+})
+
+local Sidebar = create("Frame", Body, {
+    Size = UDim2.new(0, 174, 1, 0),
+    BackgroundColor3 = Theme.Sidebar,
+    BorderSizePixel = 0,
+})
+create("Frame", Sidebar, {
+    Position = UDim2.new(1, -1, 0, 0),
+    Size = UDim2.new(0, 1, 1, 0),
+    BackgroundColor3 = Theme.Border,
+    BorderSizePixel = 0,
+})
+
+makeLabel(Sidebar, "WORKSPACE", UDim2.fromOffset(18, 18), UDim2.new(1, -36, 0, 15), 9, Theme.Dim, Enum.Font.GothamBold)
+
+local NavHolder = create("Frame", Sidebar, {
+    Position = UDim2.fromOffset(10, 47),
+    Size = UDim2.new(1, -20, 0, 235),
+    BackgroundTransparency = 1,
+})
+create("UIListLayout", NavHolder, {
+    Padding = UDim.new(0, 7),
+    SortOrder = Enum.SortOrder.LayoutOrder,
+})
+
+local BuildCard = create("Frame", Sidebar, {
+    Position = UDim2.new(0, 12, 1, -58),
+    Size = UDim2.new(1, -24, 0, 42),
+    BackgroundColor3 = Theme.Panel,
+    BorderSizePixel = 0,
+})
+addCorner(BuildCard, 9)
+makeLabel(BuildCard, "BUILD", UDim2.fromOffset(10, 5), UDim2.new(1, -20, 0, 12), 8, Theme.Dim, Enum.Font.GothamBold)
+makeLabel(BuildCard, "V22  •  STUDIO QA", UDim2.fromOffset(10, 19), UDim2.new(1, -20, 0, 15), 9, Theme.Muted, Enum.Font.GothamMedium)
+
+local Content = create("Frame", Body, {
+    Position = UDim2.fromOffset(174, 0),
+    Size = UDim2.new(1, -174, 1, 0),
+    BackgroundTransparency = 1,
+})
+
+local Pages = {}
+local NavItems = {}
+local CurrentPage = "Overview"
+
+local function createPage(name)
+    local page = create("Frame", Content, {
         Name = name,
-        Position = position,
-        Size = size,
-        BackgroundColor3 = Color3.fromRGB(23, 27, 33),
-        BorderSizePixel = 0,
-    }, parent)
-    uiNew("UICorner", {CornerRadius = UDim.new(0, 10)}, card)
-    uiNew("UIStroke", {Color = Color3.fromRGB(43, 49, 58), Thickness = 1}, card)
-    addHoverMotion(card, {Scale = 1.018, Blend = 0.12})
-    return card
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        Visible = false,
+    })
+    Pages[name] = page
+    return page
 end
 
-local function readPingMs()
-    local ok, ping = pcall(function()
-        return LocalPlayer:GetNetworkPing() * 1000
-    end)
-    if ok and type(ping) == "number" and ping >= 0 then return ping end
-    local okItem, item = pcall(function()
-        return Stats.Network.ServerStatsItem["Data Ping"]
-    end)
-    if okItem and item then
-        local okValue, value = pcall(function() return item:GetValue() end)
-        if okValue and type(value) == "number" then return value end
-        local okText, valueText = pcall(function() return item:GetValueString() end)
-        if okText and type(valueText) == "string" then
-            local number = tonumber(valueText:match("[%d%.]+"))
-            if number then return number end
+local OverviewPage = createPage("Overview")
+local SystemPage = createPage("System")
+local HitboxPage = createPage("HitboxLab")
+local SettingsPage = createPage("Settings")
+local ConsolePage = createPage("Console")
+
+local function pageHeading(parent, title, subtitle)
+    makeLabel(parent, title, UDim2.fromOffset(24, 16), UDim2.new(1, -48, 0, 29), 20, Theme.Text, Enum.Font.GothamSemibold)
+    makeLabel(parent, subtitle, UDim2.fromOffset(25, 46), UDim2.new(1, -50, 0, 18), 10, Theme.Muted, Enum.Font.Gotham)
+end
+
+local function createNavItem(name, subtitle, glyph)
+    local button = create("TextButton", NavHolder, {
+        Name = name .. "Nav",
+        Size = UDim2.new(1, 0, 0, 43),
+        BackgroundColor3 = Theme.Sidebar,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Text = "",
+        AutoButtonColor = false,
+        LayoutOrder = #NavHolder:GetChildren() + 1,
+    })
+    addCorner(button, 9)
+
+    local indicator = create("Frame", button, {
+        Position = UDim2.fromOffset(0, 9),
+        Size = UDim2.fromOffset(3, 25),
+        BackgroundColor3 = Theme.Accent,
+        BorderSizePixel = 0,
+        Visible = false,
+    })
+    addCorner(indicator, 3)
+
+    local glyphLabel = makeLabel(button, glyph, UDim2.fromOffset(11, 0), UDim2.fromOffset(21, 42), 13, Theme.Muted, Enum.Font.GothamMedium, Enum.TextXAlignment.Center)
+    local titleLabel = makeLabel(button, name, UDim2.fromOffset(39, 5), UDim2.new(1, -46, 0, 17), 11, Theme.Muted, Enum.Font.GothamSemibold)
+    makeLabel(button, subtitle, UDim2.fromOffset(39, 22), UDim2.new(1, -46, 0, 13), 8, Theme.Dim, Enum.Font.Gotham)
+
+    button.MouseEnter:Connect(function()
+        if CurrentPage ~= name then
+            tween(button, {BackgroundColor3 = Theme.Card, BackgroundTransparency = 0.25}, 0.12)
+            tween(glyphLabel, {TextColor3 = Theme.Text}, 0.12)
         end
+    end)
+    button.MouseLeave:Connect(function()
+        if CurrentPage ~= name then
+            tween(button, {BackgroundTransparency = 1}, 0.12)
+            tween(glyphLabel, {TextColor3 = Theme.Muted}, 0.12)
+        end
+    end)
+
+    NavItems[name] = {
+        Button = button,
+        Indicator = indicator,
+        Title = titleLabel,
+        Glyph = glyphLabel,
+    }
+    return button
+end
+
+createNavItem("Overview", "Session summary", "⌂")
+createNavItem("System", "Performance", "◫")
+createNavItem("Hitbox Lab", "NPC visual testing", "▣")
+createNavItem("Settings", "Preferences", "⚙")
+createNavItem("Console", "Diagnostics", "≡")
+
+local function createStatCard(parent, x, y, title, initial, glyph)
+    local card = create("Frame", parent, {
+        Position = UDim2.fromOffset(x, y),
+        Size = UDim2.fromOffset(226, 91),
+        BackgroundColor3 = Theme.Card,
+        BorderSizePixel = 0,
+    })
+    addCorner(card, 11)
+    local cardStroke = addStroke(card)
+
+    local iconBox = create("Frame", card, {
+        Position = UDim2.new(1, -42, 0, 12),
+        Size = UDim2.fromOffset(28, 28),
+        BackgroundColor3 = Theme.CardHover,
+        BorderSizePixel = 0,
+    })
+    addCorner(iconBox, 8)
+    makeLabel(iconBox, glyph, UDim2.fromScale(0, 0), UDim2.fromScale(1, 1), 12, Theme.Muted, Enum.Font.GothamSemibold, Enum.TextXAlignment.Center)
+    makeLabel(card, title, UDim2.fromOffset(14, 12), UDim2.new(1, -62, 0, 14), 9, Theme.Muted, Enum.Font.GothamBold)
+    local value = makeLabel(card, initial, UDim2.fromOffset(14, 38), UDim2.new(1, -28, 0, 30), 22, Theme.Text, Enum.Font.GothamSemibold)
+
+    card.MouseEnter:Connect(function()
+        tween(card, {BackgroundColor3 = Theme.CardHover}, 0.13)
+        tween(cardStroke, {Transparency = 0.15, Color = Theme.Accent}, 0.13)
+    end)
+    card.MouseLeave:Connect(function()
+        tween(card, {BackgroundColor3 = Theme.Card}, 0.13)
+        tween(cardStroke, {Transparency = 0, Color = Theme.Border}, 0.13)
+    end)
+
+    return value
+end
+
+-- Overview page
+pageHeading(OverviewPage, "Welcome to V4ware.", "A simple overview of your local Studio test session.")
+local OverviewFPS = createStatCard(OverviewPage, 24, 82, "FRAME RATE", "--", "◴")
+local OverviewPing = createStatCard(OverviewPage, 264, 82, "NETWORK PING", "-- ms", "⌁")
+local OverviewMemory = createStatCard(OverviewPage, 24, 186, "CLIENT MEMORY", "-- MB", "▤")
+local OverviewPlayers = createStatCard(OverviewPage, 264, 186, "PLAYERS IN SESSION", "--", "◎")
+
+local OverviewSessionCard = create("Frame", OverviewPage, {
+    Position = UDim2.fromOffset(24, 298),
+    Size = UDim2.new(1, -48, 0, 78),
+    BackgroundColor3 = Theme.Card,
+    BorderSizePixel = 0,
+})
+addCorner(OverviewSessionCard, 11)
+addStroke(OverviewSessionCard)
+makeLabel(OverviewSessionCard, "SESSION STATUS", UDim2.fromOffset(14, 9), UDim2.new(1, -28, 0, 14), 9, Theme.Muted, Enum.Font.GothamBold)
+local OverviewStatus = makeLabel(OverviewSessionCard, "CLIENT READY  •  STUDIO QA MODE", UDim2.fromOffset(14, 28), UDim2.new(1, -28, 0, 17), 10, Theme.Text, Enum.Font.GothamSemibold)
+local OverviewSession = makeLabel(OverviewSessionCard, "Session 00:00:00", UDim2.fromOffset(14, 51), UDim2.new(1, -28, 0, 13), 9, Theme.Muted, Enum.Font.Gotham)
+
+-- System page
+pageHeading(SystemPage, "System monitor", "Low-frequency client telemetry.")
+local SystemFPS = createStatCard(SystemPage, 24, 82, "FRAME RATE", "--", "◴")
+local SystemPing = createStatCard(SystemPage, 264, 82, "NETWORK PING", "-- ms", "⌁")
+local SystemMemory = createStatCard(SystemPage, 24, 186, "CLIENT MEMORY", "-- MB", "▤")
+local SystemPlayers = createStatCard(SystemPage, 264, 186, "PLAYERS IN SESSION", "--", "◎")
+
+local SystemInfo = create("Frame", SystemPage, {
+    Position = UDim2.fromOffset(24, 298),
+    Size = UDim2.new(1, -48, 0, 78),
+    BackgroundColor3 = Theme.Card,
+    BorderSizePixel = 0,
+})
+addCorner(SystemInfo, 11)
+addStroke(SystemInfo)
+makeLabel(SystemInfo, "LIGHTWEIGHT MODE", UDim2.fromOffset(14, 9), UDim2.new(1, -28, 0, 14), 9, Theme.Muted, Enum.Font.GothamBold)
+makeLabel(SystemInfo, "No animated graphs  •  No blur  •  No per-frame UI refresh", UDim2.fromOffset(14, 29), UDim2.new(1, -28, 0, 17), 10, Theme.Text, Enum.Font.Gotham)
+makeLabel(SystemInfo, "Metrics refresh once per second while Overview or System is open.", UDim2.fromOffset(14, 51), UDim2.new(1, -28, 0, 13), 9, Theme.Muted, Enum.Font.Gotham)
+
+-- Hitbox Lab page: visual adornments on explicitly tagged NPC test dummies only.
+pageHeading(HitboxPage, "Hitbox Lab", "Visual debug boxes for tagged NPC test dummies only.")
+
+local HitboxInfo = create("Frame", HitboxPage, {
+    Position = UDim2.fromOffset(24, 78),
+    Size = UDim2.new(1, -48, 0, 58),
+    BackgroundColor3 = Theme.Card,
+    BorderSizePixel = 0,
+})
+addCorner(HitboxInfo, 10)
+addStroke(HitboxInfo)
+makeLabel(HitboxInfo, "VISUAL DEBUG ONLY", UDim2.fromOffset(13, 7), UDim2.new(1, -26, 0, 14), 9, Theme.Accent, Enum.Font.GothamBold)
+makeLabel(HitboxInfo, "Only models tagged V4wareTestDummy are shown. Player characters are excluded.", UDim2.fromOffset(13, 27), UDim2.new(1, -26, 0, 18), 9, Theme.Muted, Enum.Font.Gotham)
+
+local HitboxCard = create("Frame", HitboxPage, {
+    Position = UDim2.fromOffset(24, 148),
+    Size = UDim2.new(1, -48, 0, 212),
+    BackgroundColor3 = Theme.Card,
+    BorderSizePixel = 0,
+})
+addCorner(HitboxCard, 11)
+addStroke(HitboxCard)
+
+makeLabel(HitboxCard, "VISUALIZATION", UDim2.fromOffset(14, 11), UDim2.new(1, -28, 0, 14), 9, Theme.Muted, Enum.Font.GothamBold)
+
+local HitboxToggle = makeButton(HitboxCard, "OFF", UDim2.new(1, -91, 0, 7), UDim2.fromOffset(76, 28), true)
+local HitboxToggleLabel = makeLabel(HitboxCard, "Show test-dummy boxes", UDim2.fromOffset(14, 7), UDim2.new(1, -120, 0, 28), 10, Theme.Text, Enum.Font.GothamSemibold)
+
+local function createValueField(parent, labelText, x, y, defaultValue)
+    makeLabel(parent, labelText, UDim2.fromOffset(x, y), UDim2.fromOffset(105, 20), 10, Theme.Muted, Enum.Font.GothamMedium)
+    local box = create("TextBox", parent, {
+        Position = UDim2.fromOffset(x + 105, y - 1),
+        Size = UDim2.fromOffset(76, 27),
+        BackgroundColor3 = Theme.Panel,
+        BorderSizePixel = 0,
+        Text = tostring(defaultValue),
+        PlaceholderText = "1.00",
+        ClearTextOnFocus = false,
+        TextColor3 = Theme.Text,
+        PlaceholderColor3 = Theme.Dim,
+        TextSize = 10,
+        Font = Enum.Font.GothamMedium,
+        TextXAlignment = Enum.TextXAlignment.Center,
+    })
+    addCorner(box, 7)
+    addStroke(box)
+    return box
+end
+
+local XField = createValueField(HitboxCard, "Scale X", 14, 56, Settings.HitboxX)
+local YField = createValueField(HitboxCard, "Scale Y", 218, 56, Settings.HitboxY)
+local ZField = createValueField(HitboxCard, "Scale Z", 14, 98, Settings.HitboxZ)
+local TransparencyField = createValueField(HitboxCard, "Transparency", 218, 98, Settings.HitboxTransparency)
+
+local ApplyHitboxButton = makeButton(HitboxCard, "APPLY VALUES", UDim2.fromOffset(14, 151), UDim2.fromOffset(142, 31), true)
+local ResetHitboxButton = makeButton(HitboxCard, "RESET DEFAULTS", UDim2.fromOffset(164, 151), UDim2.fromOffset(142, 31))
+local HitboxStatus = makeLabel(HitboxPage, "0 tagged test dummies found.", UDim2.fromOffset(25, 370), UDim2.new(1, -50, 0, 18), 9, Theme.Muted, Enum.Font.Gotham)
+
+-- Settings page
+pageHeading(SettingsPage, "Preferences", "Small adjustments to the control center.")
+local SettingsHolder = create("Frame", SettingsPage, {
+    Position = UDim2.fromOffset(24, 82),
+    Size = UDim2.new(1, -48, 0, 260),
+    BackgroundTransparency = 1,
+})
+create("UIListLayout", SettingsHolder, {
+    Padding = UDim.new(0, 9),
+    SortOrder = Enum.SortOrder.LayoutOrder,
+})
+
+local WaitingForKey = false
+
+local function preferenceRow(title, description, initial, order)
+    local row = create("Frame", SettingsHolder, {
+        Size = UDim2.new(1, 0, 0, 55),
+        BackgroundColor3 = Theme.Card,
+        BorderSizePixel = 0,
+        LayoutOrder = order,
+    })
+    addCorner(row, 10)
+    addStroke(row)
+    makeLabel(row, title, UDim2.fromOffset(13, 6), UDim2.new(1, -150, 0, 17), 10, Theme.Text, Enum.Font.GothamSemibold)
+    makeLabel(row, description, UDim2.fromOffset(13, 27), UDim2.new(1, -150, 0, 14), 8, Theme.Muted, Enum.Font.Gotham)
+    return makeButton(row, initial, UDim2.new(1, -124, 0.5, -15), UDim2.fromOffset(110, 30))
+end
+
+local KeyButton = preferenceRow("Panel shortcut", "Click and press a new keyboard key.", Settings.OpenKey.Name, 1)
+local CompactButton = preferenceRow("Compact layout", "Reduce the panel footprint.", "OFF", 2)
+local AccentButton = preferenceRow("Accent color", "Cycle through subtle accent colors.", Settings.AccentName, 3)
+makeLabel(SettingsPage, "Tip: the Hitbox Lab draws local debug boxes only; it does not alter collisions.", UDim2.fromOffset(24, 350), UDim2.new(1, -48, 0, 25), 9, Theme.Muted, Enum.Font.Gotham)
+
+-- Console page
+pageHeading(ConsolePage, "Diagnostics", "Local status messages. Maximum 50 entries.")
+local ClearLogButton = makeButton(ConsolePage, "CLEAR LOG", UDim2.new(1, -120, 0, 20), UDim2.fromOffset(96, 29))
+ClearLogButton.TextSize = 9
+local LogBox = create("ScrollingFrame", ConsolePage, {
+    Position = UDim2.fromOffset(24, 65),
+    Size = UDim2.new(1, -48, 1, -89),
+    BackgroundColor3 = Theme.Card,
+    BorderSizePixel = 0,
+    ScrollBarThickness = 3,
+    ScrollBarImageColor3 = Theme.Dim,
+    CanvasSize = UDim2.new(0, 0, 0, 0),
+    AutomaticCanvasSize = Enum.AutomaticSize.Y,
+})
+addCorner(LogBox, 10)
+addStroke(LogBox)
+create("UIPadding", LogBox, {
+    PaddingTop = UDim.new(0, 10),
+    PaddingBottom = UDim.new(0, 10),
+    PaddingLeft = UDim.new(0, 12),
+    PaddingRight = UDim.new(0, 12),
+})
+local LogLayout = create("UIListLayout", LogBox, {
+    Padding = UDim.new(0, 5),
+    SortOrder = Enum.SortOrder.LayoutOrder,
+})
+local Logs = {}
+local LogIndex = 0
+
+local function addLog(message, kind)
+    LogIndex += 1
+    local color = Theme.Muted
+    if kind == "ok" then color = Theme.Green end
+    if kind == "warn" then color = Theme.Amber end
+    if kind == "error" then color = Theme.Red end
+
+    local entry = create("TextLabel", LogBox, {
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -4, 0, 17),
+        Text = string.format("[%s]  %s", os.date("%H:%M:%S"), tostring(message)),
+        Font = Enum.Font.Code,
+        TextSize = 10,
+        TextColor3 = color,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        LayoutOrder = LogIndex,
+    })
+    table.insert(Logs, entry)
+
+    while #Logs > 50 do
+        local oldest = table.remove(Logs, 1)
+        if oldest then oldest:Destroy() end
+    end
+
+    task.defer(function()
+        if LogBox.Parent then
+            LogBox.CanvasPosition = Vector2.new(0, math.max(0, LogLayout.AbsoluteContentSize.Y))
+        end
+    end)
+end
+
+ClearLogButton.MouseButton1Click:Connect(function()
+    for _, entry in ipairs(Logs) do
+        if entry then entry:Destroy() end
+    end
+    table.clear(Logs)
+    addLog("Log cleared.", "ok")
+end)
+
+-- Notifications
+local Toast = create("TextLabel", ScreenGui, {
+    AnchorPoint = Vector2.new(1, 1),
+    Position = UDim2.new(1, -22, 1, -22),
+    Size = UDim2.fromOffset(250, 36),
+    BackgroundColor3 = Theme.CardHover,
+    BorderSizePixel = 0,
+    Text = "",
+    TextColor3 = Theme.Text,
+    TextSize = 10,
+    Font = Enum.Font.GothamMedium,
+    Visible = false,
+    ZIndex = 20,
+})
+addCorner(Toast, 9)
+addStroke(Toast)
+
+local ToastToken = 0
+local function notify(message)
+    ToastToken += 1
+    local currentToken = ToastToken
+    Toast.Text = tostring(message)
+    Toast.Visible = true
+    task.delay(2, function()
+        if Toast.Parent and ToastToken == currentToken then
+            Toast.Visible = false
+        end
+    end)
+end
+
+-- Hitbox Lab internals: local-only adornments for tagged NPC test dummies.
+local HitboxAdornments = {}
+
+local function isPlayerCharacter(model)
+    return model:IsA("Model") and Players:GetPlayerFromCharacter(model) ~= nil
+end
+
+local function getDummyRoot(model)
+    if not model or not model:IsA("Model") or isPlayerCharacter(model) then
+        return nil
+    end
+    if not CollectionService:HasTag(model, DUMMY_TAG) then
+        return nil
+    end
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        return nil
+    end
+    local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+    if root and root:IsA("BasePart") then
+        return root
     end
     return nil
 end
 
-local function readMemoryMb()
-    local ok, value = pcall(function()
-        return Stats:GetTotalMemoryUsageMb()
+local function destroyAdornment(model)
+    local adornment = HitboxAdornments[model]
+    if adornment then
+        adornment:Destroy()
+        HitboxAdornments[model] = nil
+    end
+end
+
+local function updateAdornment(model)
+    local root = getDummyRoot(model)
+    if not Settings.HitboxEnabled or not root then
+        destroyAdornment(model)
+        return
+    end
+
+    local adornment = HitboxAdornments[model]
+    if not adornment or not adornment.Parent then
+        adornment = Instance.new("BoxHandleAdornment")
+        adornment.Name = "V4wareLocalHitboxDebug"
+        adornment.Adornee = root
+        adornment.AlwaysOnTop = true
+        adornment.ZIndex = 0
+        adornment.Parent = Workspace
+        HitboxAdornments[model] = adornment
+    end
+
+    adornment.Adornee = root
+    adornment.Size = Vector3.new(
+        math.max(0.1, root.Size.X * Settings.HitboxX),
+        math.max(0.1, root.Size.Y * Settings.HitboxY),
+        math.max(0.1, root.Size.Z * Settings.HitboxZ)
+    )
+    adornment.Color3 = Settings.HitboxColor
+    adornment.Transparency = math.clamp(Settings.HitboxTransparency, 0, 1)
+    adornment.Visible = true
+end
+
+local function countTaggedDummies()
+    local count = 0
+    for _, instance in ipairs(CollectionService:GetTagged(DUMMY_TAG)) do
+        if getDummyRoot(instance) then
+            count += 1
+        end
+    end
+    return count
+end
+
+local function refreshHitboxes()
+    local tagged = CollectionService:GetTagged(DUMMY_TAG)
+    local alive = {}
+
+    for _, model in ipairs(tagged) do
+        if model:IsA("Model") then
+            alive[model] = true
+            updateAdornment(model)
+        end
+    end
+
+    for model in pairs(HitboxAdornments) do
+        if not alive[model] or not model.Parent then
+            destroyAdornment(model)
+        end
+    end
+
+    HitboxStatus.Text = string.format("%d tagged test dummy(s) found  •  Tag: %s", countTaggedDummies(), DUMMY_TAG)
+end
+
+local function clearAllHitboxes()
+    for model in pairs(HitboxAdornments) do
+        destroyAdornment(model)
+    end
+end
+
+local function setHitboxEnabled(enabled)
+    Settings.HitboxEnabled = enabled
+    HitboxToggle.Text = enabled and "ON" or "OFF"
+    HitboxToggle.BackgroundColor3 = enabled and Color3.fromRGB(24, 43, 36) or Theme.Card
+    HitboxToggle.TextColor3 = enabled and Theme.Green or Theme.Text
+
+    if enabled then
+        refreshHitboxes()
+        addLog("Local test-dummy visualization enabled.", "ok")
+        notify("Hitbox visualization ON")
+    else
+        clearAllHitboxes()
+        HitboxStatus.Text = string.format("%d tagged test dummy(s) found  •  visualization OFF", countTaggedDummies())
+        addLog("Local test-dummy visualization disabled.", "ok")
+        notify("Hitbox visualization OFF")
+    end
+end
+
+local function parseNumber(field, fallback, minimum, maximum)
+    local value = tonumber(string.gsub(field.Text, ",", "."))
+    if not value then
+        field.Text = tostring(fallback)
+        return fallback
+    end
+    value = math.clamp(value, minimum, maximum)
+    field.Text = string.format("%.2f", value)
+    return value
+end
+
+local function applyHitboxValues()
+    Settings.HitboxX = parseNumber(XField, Settings.HitboxX, 0.25, 5)
+    Settings.HitboxY = parseNumber(YField, Settings.HitboxY, 0.25, 5)
+    Settings.HitboxZ = parseNumber(ZField, Settings.HitboxZ, 0.25, 5)
+    Settings.HitboxTransparency = parseNumber(TransparencyField, Settings.HitboxTransparency, 0, 1)
+
+    if Settings.HitboxEnabled then
+        refreshHitboxes()
+    end
+
+    addLog(string.format(
+        "Visual scales applied: X %.2f / Y %.2f / Z %.2f / Transparency %.2f",
+        Settings.HitboxX, Settings.HitboxY, Settings.HitboxZ, Settings.HitboxTransparency
+    ), "ok")
+    notify("Hitbox Lab values applied")
+end
+
+HitboxToggle.MouseButton1Click:Connect(function()
+    setHitboxEnabled(not Settings.HitboxEnabled)
+end)
+
+ApplyHitboxButton.MouseButton1Click:Connect(applyHitboxValues)
+
+ResetHitboxButton.MouseButton1Click:Connect(function()
+    Settings.HitboxX = 1.50
+    Settings.HitboxY = 1.50
+    Settings.HitboxZ = 1.25
+    Settings.HitboxTransparency = 0.50
+    XField.Text = "1.50"
+    YField.Text = "1.50"
+    ZField.Text = "1.25"
+    TransparencyField.Text = "0.50"
+    applyHitboxValues()
+    notify("Default values restored")
+end)
+
+-- React to tag changes without a permanent frame loop.
+CollectionService:GetInstanceAddedSignal(DUMMY_TAG):Connect(function(instance)
+    if Settings.HitboxEnabled and instance:IsA("Model") then
+        updateAdornment(instance)
+    end
+    HitboxStatus.Text = string.format("%d tagged test dummy(s) found.", countTaggedDummies())
+end)
+
+CollectionService:GetInstanceRemovedSignal(DUMMY_TAG):Connect(function(instance)
+    destroyAdornment(instance)
+    HitboxStatus.Text = string.format("%d tagged test dummy(s) found.", countTaggedDummies())
+end)
+
+-- Navigation
+local function setPage(name)
+    CurrentPage = name
+    for pageName, pageObject in pairs(Pages) do
+        pageObject.Visible = pageName == name
+    end
+
+    for navName, item in pairs(NavItems) do
+        local active = navName == name
+        item.Indicator.Visible = active
+        item.Button.BackgroundTransparency = active and 0 or 1
+        item.Button.BackgroundColor3 = active and Theme.Panel or Theme.Sidebar
+        item.Title.TextColor3 = active and Theme.Text or Theme.Muted
+        item.Glyph.TextColor3 = active and Theme.Accent or Theme.Muted
+    end
+
+    if name == "Hitbox Lab" then
+        HitboxStatus.Text = string.format("%d tagged test dummy(s) found  •  Tag: %s", countTaggedDummies(), DUMMY_TAG)
+    end
+end
+
+for name, item in pairs(NavItems) do
+    item.Button.MouseButton1Click:Connect(function()
+        setPage(name)
     end)
-    if ok and type(value) == "number" then return value end
-    return nil
+end
+
+-- Lightweight system metrics: sample once per second only on visible monitor pages.
+local SessionStarted = os.clock()
+local FrameCount = 0
+local LastFPS = 0
+local RenderConnection = nil
+
+local function needsSampling()
+    return ScreenGui.Enabled and Main.Visible and Body.Visible
+        and (CurrentPage == "Overview" or CurrentPage == "System")
+end
+
+local function refreshFrameSampler()
+    local wanted = needsSampling()
+    if wanted and not RenderConnection then
+        FrameCount = 0
+        RenderConnection = RunService.RenderStepped:Connect(function()
+            FrameCount += 1
+        end)
+    elseif not wanted and RenderConnection then
+        RenderConnection:Disconnect()
+        RenderConnection = nil
+    end
+end
+
+local function readPing()
+    local ok, value = pcall(function()
+        local item = Stats.Network.ServerStatsItem:FindFirstChild("Data Ping")
+        if not item then return nil end
+        return math.floor(item:GetValue())
+    end)
+    if ok and value then return tostring(value) .. " ms" end
+    return "N/A"
+end
+
+local function readMemory()
+    local ok, value = pcall(function()
+        return math.floor(Stats:GetTotalMemoryUsageMb())
+    end)
+    if ok and value then return tostring(value) .. " MB" end
+    return "N/A"
 end
 
 local function formatDuration(seconds)
     seconds = math.max(0, math.floor(seconds))
-    local hours = math.floor(seconds / 3600)
-    local minutes = math.floor((seconds % 3600) / 60)
-    local secs = seconds % 60
-    return string.format("%02d:%02d:%02d", hours, minutes, secs)
+    return string.format("%02d:%02d:%02d",
+        math.floor(seconds / 3600),
+        math.floor((seconds % 3600) / 60),
+        seconds % 60
+    )
 end
 
-local function buildMenu()
-    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 10)
-    if not playerGui then
-        warn("[V4ware] PlayerGui nao encontrado; menu nao criado")
+local function updateMetrics()
+    if not needsSampling() then
+        refreshFrameSampler()
         return
     end
 
-    local old = playerGui:FindFirstChild("V4ware_ControlPanel")
-    if old then old:Destroy() end
-
-    menuGui = uiNew("ScreenGui", {
-        Name = "V4ware_ControlPanel",
-        ResetOnSpawn = false,
-        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-        DisplayOrder = 100,
-        Enabled = false,
-        IgnoreGuiInset = false,
-    }, playerGui)
-
-    menuPanel = uiNew("Frame", {
-        Name = "Panel",
-        Size = UDim2.fromOffset(740, 500),
-        AnchorPoint = Vector2.new(0.5, 0.5),
-        Position = UDim2.fromScale(0.5, 0.5),
-        BackgroundColor3 = Color3.fromRGB(12, 14, 18),
-        BorderSizePixel = 0,
-        Active = true,
-    }, menuGui)
-    panelScale = uiNew("UIScale", {Scale = 1}, menuPanel)
-    uiNew("UICorner", {CornerRadius = UDim.new(0, 14)}, menuPanel)
-    uiNew("UIStroke", {Color = Color3.fromRGB(43, 49, 59), Thickness = 1}, menuPanel)
-    uiNew("UISizeConstraint", {
-        MinSize = Vector2.new(620, 66),
-        MaxSize = Vector2.new(900, 620),
-    }, menuPanel)
-
-    -- Header
-    local header = uiNew("Frame", {
-        Name = "Header",
-        Size = UDim2.new(1, 0, 0, 66),
-        BackgroundColor3 = Color3.fromRGB(17, 20, 25),
-        BorderSizePixel = 0,
-    }, menuPanel)
-    uiNew("UICorner", {CornerRadius = UDim.new(0, 14)}, header)
-    uiNew("Frame", {
-        Position = UDim2.new(0, 0, 1, -13),
-        Size = UDim2.new(1, 0, 0, 13),
-        BackgroundColor3 = Color3.fromRGB(17, 20, 25),
-        BorderSizePixel = 0,
-    }, header)
-
-    local logo = uiCard(header, "LogoMark", UDim2.fromOffset(18, 14), UDim2.fromOffset(38, 38))
-    uiText(logo, "V4", {
-        Size = UDim2.fromScale(1, 1),
-        TextXAlignment = Enum.TextXAlignment.Center,
-        Font = Enum.Font.GothamBold,
-        TextSize = 13,
-        TextColor3 = accentColor,
-    })
-    uiText(header, "V4ware", {
-        Position = UDim2.fromOffset(66, 12),
-        Size = UDim2.fromOffset(170, 24),
-        Font = Enum.Font.GothamSemibold,
-        TextSize = 18,
-        TextColor3 = Color3.fromRGB(241, 244, 249),
-    })
-    uiText(header, "CLEAN CONTROL CENTER  •  V20.1", {
-        Position = UDim2.fromOffset(67, 35),
-        Size = UDim2.fromOffset(240, 14),
-        Font = Enum.Font.GothamMedium,
-        TextSize = 8,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
-    })
-
-    local onlinePill = uiNew("Frame", {
-        Position = UDim2.new(1, -142, 0, 21),
-        Size = UDim2.fromOffset(74, 24),
-        BackgroundColor3 = Color3.fromRGB(24, 43, 36),
-        BorderSizePixel = 0,
-    }, header)
-    uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, onlinePill)
-    local dot = uiNew("Frame", {
-        Position = UDim2.fromOffset(9, 8),
-        Size = UDim2.fromOffset(7, 7),
-        BackgroundColor3 = Color3.fromRGB(111, 207, 151),
-        BorderSizePixel = 0,
-    }, onlinePill)
-    uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, dot)
-    uiText(onlinePill, "ONLINE", {
-        Position = UDim2.fromOffset(22, 0),
-        Size = UDim2.new(1, -24, 1, 0),
-        Font = Enum.Font.GothamBold,
-        TextSize = 9,
-        TextColor3 = Color3.fromRGB(111, 207, 151),
-    })
-
-    local minimize = uiButton(header, "–", {
-        Position = UDim2.new(1, -61, 0, 19),
-        Size = UDim2.fromOffset(27, 27),
-        TextSize = 16,
-    })
-    local close = uiButton(header, "×", {
-        Position = UDim2.new(1, -29, 0, 19),
-        Size = UDim2.fromOffset(27, 27),
-        TextSize = 17,
-    })
-
-    -- Sidebar
-    local body = uiNew("Frame", {
-        Name = "Body",
-        Position = UDim2.fromOffset(0, 66),
-        Size = UDim2.new(1, 0, 1, -66),
-        BackgroundTransparency = 1,
-    }, menuPanel)
-
-    local sidebar = uiNew("Frame", {
-        Name = "Sidebar",
-        Size = UDim2.new(0, 158, 1, 0),
-        BackgroundColor3 = Color3.fromRGB(17, 20, 25),
-        BorderSizePixel = 0,
-    }, body)
-    uiNew("Frame", {
-        Position = UDim2.new(1, -1, 0, 0),
-        Size = UDim2.new(0, 1, 1, 0),
-        BackgroundColor3 = Color3.fromRGB(43, 49, 59),
-        BorderSizePixel = 0,
-    }, sidebar)
-    uiText(sidebar, "WORKSPACE", {
-        Position = UDim2.fromOffset(16, 17),
-        Size = UDim2.new(1, -30, 0, 16),
-        Font = Enum.Font.GothamBold,
-        TextSize = 9,
-        TextColor3 = Color3.fromRGB(101, 112, 127),
-    })
-
-    local nav = uiNew("Frame", {
-        Name = "Navigation",
-        Position = UDim2.fromOffset(9, 45),
-        Size = UDim2.new(1, -18, 0, 230),
-        BackgroundTransparency = 1,
-    }, sidebar)
-    uiNew("UIListLayout", {
-        Padding = UDim.new(0, 6),
-        SortOrder = Enum.SortOrder.LayoutOrder,
-    }, nav)
-
-    local footer = uiCard(sidebar, "BuildInfo", UDim2.new(0, 10, 1, -53), UDim2.new(1, -20, 0, 39))
-    uiText(footer, "BUILD", {
-        Position = UDim2.fromOffset(9, 3),
-        Size = UDim2.new(1, -18, 0, 12),
-        Font = Enum.Font.GothamBold,
-        TextSize = 8,
-        TextColor3 = Color3.fromRGB(101, 112, 127),
-    })
-    uiText(footer, "V20.1  •  PREMIUM", {
-        Position = UDim2.fromOffset(9, 17),
-        Size = UDim2.new(1, -18, 0, 15),
-        Font = Enum.Font.GothamMedium,
-        TextSize = 9,
-        TextColor3 = Color3.fromRGB(177, 187, 200),
-    })
-
-    local content = uiNew("Frame", {
-        Name = "Content",
-        Position = UDim2.fromOffset(158, 0),
-        Size = UDim2.new(1, -158, 1, 0),
-        BackgroundTransparency = 1,
-    }, body)
-
-    local pages, navItems = {}, {}
-    local lastRenderedTab = nil
-    local function makePage(name)
-        local page = uiNew("Frame", {
-            Name = name,
-            Size = UDim2.fromScale(1, 1),
-            Position = UDim2.fromOffset(0, 0),
-            BackgroundTransparency = 1,
-            Visible = false,
-        }, content)
-        pages[name] = page
-        return page
+    if RenderConnection then
+        LastFPS = FrameCount
+        FrameCount = 0
     end
 
-    local overviewPage = makePage("Overview")
-    local playersPage = makePage("Players")
-    local systemPage = makePage("System")
-    local spreadPage = makePage("Spread")
-    local settingsPage = makePage("Settings")
+    local fpsText = LastFPS > 0 and tostring(LastFPS) or "N/A"
+    local pingText = readPing()
+    local memoryText = readMemory()
+    local playerText = tostring(#Players:GetPlayers())
 
-    local function heading(parent, title, subtitle)
-        uiText(parent, title, {
-            Position = UDim2.fromOffset(22, 15),
-            Size = UDim2.new(1, -44, 0, 27),
-            Font = Enum.Font.GothamSemibold,
-            TextSize = 19,
-            TextColor3 = Color3.fromRGB(241, 244, 249),
-        })
-        uiText(parent, subtitle, {
-            Position = UDim2.fromOffset(23, 43),
-            Size = UDim2.new(1, -46, 0, 17),
-            Font = Enum.Font.Gotham,
-            TextSize = 10,
-            TextColor3 = Color3.fromRGB(133, 143, 157),
-        })
-    end
+    OverviewFPS.Text, SystemFPS.Text = fpsText, fpsText
+    OverviewPing.Text, SystemPing.Text = pingText, pingText
+    OverviewMemory.Text, SystemMemory.Text = memoryText, memoryText
+    OverviewPlayers.Text, SystemPlayers.Text = playerText, playerText
+    OverviewSession.Text = "Session " .. formatDuration(os.clock() - SessionStarted)
+end
 
-    local function navItem(name, subtitle, glyph, order)
-        local b = uiNew("TextButton", {
-            Name = name .. "Nav",
-            Size = UDim2.new(1, 0, 0, 43),
-            BackgroundColor3 = Color3.fromRGB(17, 20, 25),
-            BackgroundTransparency = 1,
-            BorderSizePixel = 0,
-            Text = "",
-            AutoButtonColor = false,
-            LayoutOrder = order,
-        }, nav)
-        uiNew("UICorner", {CornerRadius = UDim.new(0, 8)}, b)
-        local bar = uiNew("Frame", {
-            Position = UDim2.fromOffset(0, 9),
-            Size = UDim2.fromOffset(3, 25),
-            BackgroundColor3 = accentColor,
-            BorderSizePixel = 0,
-            Visible = false,
-        }, b)
-        uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, bar)
-        local icon = uiText(b, glyph, {
-            Position = UDim2.fromOffset(10, 0),
-            Size = UDim2.fromOffset(22, 42),
-            TextXAlignment = Enum.TextXAlignment.Center,
-            Font = Enum.Font.GothamSemibold,
-            TextSize = 13,
-            TextColor3 = Color3.fromRGB(135, 146, 161),
-        })
-        local title = uiText(b, name, {
-            Position = UDim2.fromOffset(39, 5),
-            Size = UDim2.new(1, -46, 0, 17),
-            Font = Enum.Font.GothamSemibold,
-            TextSize = 11,
-            TextColor3 = Color3.fromRGB(135, 146, 161),
-        })
-        uiText(b, subtitle, {
-            Position = UDim2.fromOffset(39, 22),
-            Size = UDim2.new(1, -46, 0, 13),
-            Font = Enum.Font.Gotham,
-            TextSize = 8,
-            TextColor3 = Color3.fromRGB(97, 108, 123),
-        })
-        local navScale = uiNew("UIScale", {Scale = 1}, b)
-        local navStroke = uiNew("UIStroke", {
-            Color = accentColor,
-            Thickness = 1,
-            Transparency = 1,
-        }, b)
-        local navState = {
-            button = b, bar = bar, icon = icon, title = title,
-            active = false, scale = navScale, stroke = navStroke,
-        }
-        navItems[name] = navState
-
-        b.MouseEnter:Connect(function()
-            playUiTween(navScale, HOVER_IN, {Scale = 1.025})
-            playUiTween(navStroke, HOVER_IN, {Transparency = 0.55, Color = accentColor})
-            if not navState.active then
-                playUiTween(b, HOVER_IN, {
-                    BackgroundTransparency = 0.42,
-                    BackgroundColor3 = Color3.fromRGB(25, 30, 37),
-                })
-                playUiTween(title, HOVER_IN, {TextColor3 = Color3.fromRGB(226, 232, 241)})
-                playUiTween(icon, HOVER_IN, {TextColor3 = accentColor})
-            end
-        end)
-        b.MouseLeave:Connect(function()
-            playUiTween(navScale, HOVER_OUT, {Scale = 1})
-            playUiTween(navStroke, HOVER_OUT, {Transparency = navState.active and 0.72 or 1})
-            if not navState.active then
-                playUiTween(b, HOVER_OUT, {BackgroundTransparency = 1})
-                playUiTween(title, HOVER_OUT, {TextColor3 = Color3.fromRGB(135, 146, 161)})
-                playUiTween(icon, HOVER_OUT, {TextColor3 = Color3.fromRGB(135, 146, 161)})
-            end
-        end)
-        return b
-    end
-
-    navItem("Overview", "Session summary", "⌂", 1)
-    navItem("Players", "Whitelist / Incognito", "◎", 2)
-    navItem("Spread", "Weapon tuning", "◌", 3)
-    navItem("System", "Performance", "◫", 4)
-    navItem("Settings", "Preferences", "⚙", 5)
-
-    local function metricCard(parent, key, title, x, y, width)
-        local card = uiCard(parent, key, UDim2.fromOffset(x, y), UDim2.fromOffset(width, 82))
-        uiText(card, title:upper(), {
-            Position = UDim2.fromOffset(12, 9),
-            Size = UDim2.new(1, -24, 0, 14),
-            Font = Enum.Font.GothamBold,
-            TextSize = 8,
-            TextColor3 = Color3.fromRGB(132, 143, 158),
-        })
-        monitorValues[key] = uiText(card, "--", {
-            Position = UDim2.fromOffset(12, 30),
-            Size = UDim2.new(1, -24, 0, 30),
-            Font = Enum.Font.GothamSemibold,
-            TextSize = 21,
-            TextColor3 = Color3.fromRGB(241, 244, 249),
-        })
-    end
-
-    -- Overview dashboard: mostra o estado da configuracao, sem criar loops por modulo.
-    heading(overviewPage, "Overview", "Status geral da V4ware e da sessao atual.")
-    local featureCards = {}
-    local function featureCard(key, title, x, y)
-        local card = uiCard(overviewPage, key, UDim2.fromOffset(x, y), UDim2.fromOffset(226, 63))
-        local dotFeature = uiNew("Frame", {
-            Position = UDim2.fromOffset(13, 25),
-            Size = UDim2.fromOffset(7, 7),
-            BackgroundColor3 = Color3.fromRGB(105, 113, 124),
-            BorderSizePixel = 0,
-        }, card)
-        uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, dotFeature)
-        uiText(card, title, {
-            Position = UDim2.fromOffset(29, 10),
-            Size = UDim2.new(1, -95, 0, 18),
-            Font = Enum.Font.GothamMedium,
-            TextSize = 10,
-            TextColor3 = Color3.fromRGB(220, 226, 235),
-        })
-        local value = uiText(card, "OFF", {
-            Position = UDim2.new(1, -67, 0, 10),
-            Size = UDim2.fromOffset(54, 18),
-            Font = Enum.Font.GothamBold,
-            TextSize = 9,
-            TextXAlignment = Enum.TextXAlignment.Right,
-            TextColor3 = Color3.fromRGB(132, 143, 158),
-        })
-        featureCards[key] = {value = value, dot = dotFeature}
-    end
-
-    featureCard("Triggerbot", "Triggerbot", 22, 70)
-    featureCard("InfiniteJump", "Infinite Jump", 264, 70)
-    featureCard("ESP", "ESP", 22, 140)
-    featureCard("Camlock", "Camlock", 264, 140)
-    featureCard("Hitbox", "Hitbox Expander", 22, 210)
-    featureCard("Spread", "Spread Modification", 264, 210)
-
-    featureCard("WeaponSwitch", "Weapon Switch", 22, 280)
-
-    local overviewBottom = uiCard(overviewPage, "OverviewSession", UDim2.fromOffset(22, 354), UDim2.new(1, -44, 0, 66))
-    uiText(overviewBottom, "SESSION", {
-        Position = UDim2.fromOffset(13, 8),
-        Size = UDim2.new(1, -26, 0, 13),
-        Font = Enum.Font.GothamBold,
-        TextSize = 8,
-        TextColor3 = Color3.fromRGB(132, 143, 158),
-    })
-    local overviewSession = uiText(overviewBottom, "ONLINE  •  INSERT TO OPEN / CLOSE", {
-        Position = UDim2.fromOffset(13, 27),
-        Size = UDim2.new(1, -26, 0, 17),
-        Font = Enum.Font.GothamSemibold,
-        TextSize = 10,
-        TextColor3 = Color3.fromRGB(231, 236, 244),
-    })
-    local overviewUptime = uiText(overviewBottom, "Session 00:00:00", {
-        Position = UDim2.fromOffset(13, 45),
-        Size = UDim2.new(1, -26, 0, 13),
-        Font = Enum.Font.Gotham,
-        TextSize = 9,
-        TextColor3 = Color3.fromRGB(132, 143, 158),
-    })
-
-    local function setFeature(key, enabled, active)
-        local item = featureCards[key]
-        if not item then return end
-        local on = enabled == true
-        item.value.Text = not on and "OFF" or (active == false and "READY" or "ON")
-        item.value.TextColor3 = on and accentColor or Color3.fromRGB(132, 143, 158)
-        item.dot.BackgroundColor3 = on and Color3.fromRGB(111, 207, 151) or Color3.fromRGB(83, 91, 103)
-    end
-
-    refreshDashboard = function()
-        setFeature("Triggerbot", Config.Triggerbot and Config.Triggerbot.Enabled, true)
-        setFeature("InfiniteJump", Config.Movement and Config.Movement.InfiniteJump and Config.Movement.InfiniteJump.Enabled, true)
-        setFeature("ESP", Config.ESP and Config.ESP.Enabled, espActive)
-        setFeature("Camlock", Config.Camlock and Config.Camlock.Enabled, camActive)
-        setFeature("Hitbox", Config.HitboxExpander and Config.HitboxExpander.Enabled, true)
-        setFeature("Spread", Config.SpreadModification and Config.SpreadModification.Enabled, true)
-        setFeature("WeaponSwitch", weaponSwitchConfig().Enabled, true)
-        overviewUptime.Text = "Session " .. formatDuration(os.clock() - sessionStartedAt)
-    end
-
-    -- Players
-    heading(playersPage, "Players", "Gerencie as listas e visualize a sessao.")
-    tabWhitelist = uiButton(playersPage, "WHITELIST", {
-        Position = UDim2.fromOffset(22, 73),
-        Size = UDim2.fromOffset(112, 29),
-        BackgroundColor3 = Color3.fromRGB(35, 42, 51),
-    })
-    tabIncognito = uiButton(playersPage, "INCOGNITO", {
-        Position = UDim2.fromOffset(142, 73),
-        Size = UDim2.fromOffset(112, 29),
-    })
-    menuPlayers = uiNew("ScrollingFrame", {
-        Name = "PlayerList",
-        Position = UDim2.fromOffset(22, 112),
-        Size = UDim2.new(1, -44, 1, -151),
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        ScrollBarThickness = 3,
-        ScrollBarImageColor3 = Color3.fromRGB(88, 97, 110),
-        AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        CanvasSize = UDim2.fromOffset(0, 0),
-    }, playersPage)
-    uiNew("UIListLayout", {
-        SortOrder = Enum.SortOrder.LayoutOrder,
-        Padding = UDim.new(0, 5),
-    }, menuPlayers)
-    menuCount = uiText(playersPage, "WHITELIST  •  0 entries", {
-        Position = UDim2.new(0, 23, 1, -29),
-        Size = UDim2.new(1, -46, 0, 17),
-        Font = Enum.Font.GothamMedium,
-        TextSize = 9,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
-    })
-
-    -- System
-    heading(systemPage, "System monitor", "Telemetria local com atualizacao em baixa frequencia.")
-    monitorFrame = uiNew("Frame", {
-        Name = "SystemMonitor",
-        Position = UDim2.fromOffset(22, 76),
-        Size = UDim2.new(1, -44, 1, -98),
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-    }, systemPage)
-    metricCard(monitorFrame, "FPS", "Frame rate", 0, 0, 226)
-    metricCard(monitorFrame, "Ping", "Network ping", 242, 0, 226)
-    metricCard(monitorFrame, "Memory", "Client memory", 0, 96, 226)
-    metricCard(monitorFrame, "Players", "Players in session", 242, 96, 226)
-    local systemSession = uiCard(monitorFrame, "SystemSession", UDim2.fromOffset(0, 192), UDim2.new(1, 0, 0, 65))
-    uiText(systemSession, "SESSION STATUS", {
-        Position = UDim2.fromOffset(13, 8),
-        Size = UDim2.new(1, -26, 0, 13),
-        Font = Enum.Font.GothamBold,
-        TextSize = 8,
-        TextColor3 = Color3.fromRGB(132, 143, 158),
-    })
-    monitorValues.Status = uiText(systemSession, "ONLINE  •  CLIENT MONITOR ACTIVE", {
-        Position = UDim2.fromOffset(13, 25),
-        Size = UDim2.new(1, -26, 0, 16),
-        Font = Enum.Font.GothamSemibold,
-        TextSize = 10,
-    })
-    monitorValues.Uptime = uiText(systemSession, "Session 00:00:00", {
-        Position = UDim2.fromOffset(13, 44),
-        Size = UDim2.new(1, -26, 0, 13),
-        Font = Enum.Font.Gotham,
-        TextSize = 9,
-        TextColor3 = Color3.fromRGB(132, 143, 158),
-    })
-
-    updateSystemMonitor = function()
-        if not monitorFrame or not monitorFrame.Parent then return end
-        monitorValues.FPS.Text = currentFPS > 0 and tostring(currentFPS) or "--"
-        local ping = readPingMs()
-        monitorValues.Ping.Text = ping and string.format("%.0f ms", ping) or "N/A"
-        local memory = readMemoryMb()
-        monitorValues.Memory.Text = memory and string.format("%.0f MB", memory) or "N/A"
-        monitorValues.Players.Text = tostring(#Players:GetPlayers())
-        monitorValues.Status.Text = monitorEnabled and "ONLINE  •  CLIENT MONITOR ACTIVE" or "MONITOR PAUSED"
-        monitorValues.Uptime.Text = "Session  " .. formatDuration(os.clock() - sessionStartedAt)
-    end
-
-    -- Spread tuning panel. Values are written back to the existing Config table.
-    local spreadRows = {}
-    local spreadNames = {
-        {key = "[Double-Barrel SG]", title = "Double-Barrel"},
-        {key = "[TacticalShotgun]", title = "Tactical Shotgun"},
-        {key = "[Revolver]", title = "Revolver"},
-    }
-    heading(spreadPage, "Spread settings", "Multipliers: 1.00 = original value  •  0.00 = zero multiplier")
-    local spreadStatus = uiText(spreadPage, "EDIT VALUES, THEN APPLY CHANGES", {
-        Position = UDim2.fromOffset(23, 62),
-        Size = UDim2.new(1, -46, 0, 14),
-        Font = Enum.Font.GothamMedium,
-        TextSize = 8,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
-    })
-    local function spreadValue(key)
-        if type(Config.SpreadModification) ~= "table" then
-            Config.SpreadModification = {Enabled = false, RefreshTime = 6, Guns = {}}
-        end
-        if type(Config.SpreadModification.Guns) ~= "table" then
-            Config.SpreadModification.Guns = {}
-        end
-        local n = tonumber(Config.SpreadModification.Guns[key])
-        return math.clamp(n or 1, 0, 1.5)
-    end
-    local function updateSpreadRow(key)
-        local row = spreadRows[key]
-        if not row then return end
-        local value = spreadValue(key)
-        row.value.Text = string.format("%.2f", value)
-        row.fill.Size = UDim2.new(value / 1.5, 0, 1, 0)
-    end
-
-    for index, item in ipairs(spreadNames) do
-        local weaponKey = item.key
-        local weaponTitle = item.title
-        local y = 82 + (index - 1) * 82
-        local card = uiCard(spreadPage, "Spread_" .. tostring(index), UDim2.fromOffset(22, y), UDim2.new(1, -44, 0, 70))
-        uiText(card, weaponTitle, {
-            Position = UDim2.fromOffset(13, 8),
-            Size = UDim2.new(1, -160, 0, 17),
-            Font = Enum.Font.GothamSemibold,
-            TextSize = 11,
-        })
-        local value = uiNew("TextBox", {
-            Position = UDim2.new(1, -125, 0, 7),
-            Size = UDim2.fromOffset(50, 18),
-            BackgroundTransparency = 1,
-            Text = "1.00",
-            ClearTextOnFocus = false,
-            Font = Enum.Font.GothamBold,
-            TextSize = 11,
-            TextXAlignment = Enum.TextXAlignment.Right,
-            TextColor3 = accentColor,
-            BorderSizePixel = 0,
-        }, card)
-        local minus = uiButton(card, "−", {
-            Position = UDim2.new(1, -66, 0, 7),
-            Size = UDim2.fromOffset(25, 23),
-            TextSize = 14,
-        })
-        local plus = uiButton(card, "+", {
-            Position = UDim2.new(1, -35, 0, 7),
-            Size = UDim2.fromOffset(25, 23),
-            TextSize = 13,
-        })
-        local track = uiNew("Frame", {
-            Position = UDim2.fromOffset(13, 43),
-            Size = UDim2.new(1, -26, 0, 7),
-            BackgroundColor3 = Color3.fromRGB(43, 49, 58),
-            BorderSizePixel = 0,
-        }, card)
-        uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, track)
-        local fill = uiNew("Frame", {
-            Size = UDim2.new(0, 0, 1, 0),
-            BackgroundColor3 = accentColor,
-            BorderSizePixel = 0,
-        }, track)
-        uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, fill)
-        spreadRows[weaponKey] = {value = value, fill = fill}
-        value.FocusLost:Connect(function()
-            local typed = tonumber(value.Text)
-            if typed == nil then
-                updateSpreadRow(weaponKey)
-                return
-            end
-            Config.SpreadModification.Guns[weaponKey] = math.clamp(typed, 0, 1.5)
-            updateSpreadRow(weaponKey)
-            spreadStatus.Text = "UNAPPLIED CHANGE  •  CLICK APPLY CHANGES"
-            spreadStatus.TextColor3 = Color3.fromRGB(226, 185, 112)
-        end)
-        local function change(delta)
-            Config.SpreadModification.Guns[weaponKey] = math.clamp(spreadValue(weaponKey) + delta, 0, 1.5)
-            updateSpreadRow(weaponKey)
-            spreadStatus.Text = "UNAPPLIED CHANGE  •  CLICK APPLY CHANGES"
-            spreadStatus.TextColor3 = Color3.fromRGB(226, 185, 112)
-        end
-        minus.Activated:Connect(function() change(-0.05) end)
-        plus.Activated:Connect(function() change(0.05) end)
-        updateSpreadRow(weaponKey)
-    end
-
-    local applySpreadButton = uiButton(spreadPage, "APPLY CHANGES", {
-        Position = UDim2.fromOffset(22, 334),
-        Size = UDim2.fromOffset(132, 31),
-        BackgroundColor3 = Color3.fromRGB(38, 49, 62),
-        TextColor3 = Color3.fromRGB(228, 237, 248),
-    })
-    local resetSpreadButton = uiButton(spreadPage, "RESET DEFAULTS", {
-        Position = UDim2.fromOffset(162, 334),
-        Size = UDim2.fromOffset(124, 31),
-    })
-    local spreadInfo = uiText(spreadPage, "Patch status: waiting for scan.", {
-        Position = UDim2.fromOffset(23, 372),
-        Size = UDim2.new(1, -46, 0, 34),
-        Font = Enum.Font.Gotham,
-        TextSize = 9,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
-        TextWrapped = true,
-    })
-
-    local function refreshSpreadStatus()
-        local patched = (spreadPatched["[Double-Barrel SG]"] or 0)
-            + (spreadPatched["[TacticalShotgun]"] or 0)
-            + (spreadPatched["[Revolver]"] or 0)
-        local detail = spreadLastError and ("  •  " .. tostring(spreadLastError)) or ""
-        spreadInfo.Text = string.format("Matched functions: %d  |  patched constants: %d%s", spreadCandidatesSeen, patched, detail)
-    end
-
-    applySpreadButton.Activated:Connect(function()
-        if not Config.SpreadModification.Enabled then
-            spreadStatus.Text = "SPREAD MODIFICATION IS DISABLED IN CONFIG"
-            spreadStatus.TextColor3 = Color3.fromRGB(226, 185, 112)
-            return
-        end
-        local ok, err = pcall(updateSpread)
-        refreshSpreadStatus()
-        if not ok then
-            spreadStatus.Text = "SCAN FAILED  •  " .. tostring(err)
-            spreadStatus.TextColor3 = Color3.fromRGB(224, 119, 119)
-        elseif spreadLastError then
-            spreadStatus.Text = "SCAN FINISHED  •  CHECK DIAGNOSTIC BELOW"
-            spreadStatus.TextColor3 = Color3.fromRGB(226, 185, 112)
+task.spawn(function()
+    while ScreenGui.Parent do
+        if needsSampling() then
+            updateMetrics()
         else
-            spreadStatus.Text = "SCAN FINISHED  •  CHECK PATCH COUNTS BELOW"
-            spreadStatus.TextColor3 = Color3.fromRGB(111, 207, 151)
+            refreshFrameSampler()
         end
-    end)
-
-    resetSpreadButton.Activated:Connect(function()
-        Config.SpreadModification.Guns["[Double-Barrel SG]"] = 0.65
-        Config.SpreadModification.Guns["[TacticalShotgun]"] = 0.60
-        Config.SpreadModification.Guns["[Revolver]"] = 0
-        for _, item in ipairs(spreadNames) do updateSpreadRow(item.key) end
-        spreadStatus.Text = "DEFAULT VALUES RESTORED  •  CLICK APPLY"
-        spreadStatus.TextColor3 = Color3.fromRGB(226, 185, 112)
-    end)
-
-    -- Settings
-    heading(settingsPage, "Settings", "Preferencias leves para o painel.")
-    local settingsCard = uiCard(settingsPage, "SettingsCard", UDim2.fromOffset(22, 78), UDim2.new(1, -44, 0, 168))
-    uiText(settingsCard, "SYSTEM MONITOR", {
-        Position = UDim2.fromOffset(14, 12),
-        Size = UDim2.new(1, -145, 0, 18),
-        Font = Enum.Font.GothamSemibold,
-        TextSize = 11,
-    })
-    uiText(settingsCard, "Pause live metrics when you do not need them.", {
-        Position = UDim2.fromOffset(14, 32),
-        Size = UDim2.new(1, -145, 0, 15),
-        Font = Enum.Font.Gotham,
-        TextSize = 9,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
-    })
-    local monitorToggle = uiButton(settingsCard, "ON", {
-        Position = UDim2.new(1, -83, 0, 18),
-        Size = UDim2.fromOffset(66, 28),
-    })
-    uiText(settingsCard, "COMPACT PANEL", {
-        Position = UDim2.fromOffset(14, 79),
-        Size = UDim2.new(1, -145, 0, 18),
-        Font = Enum.Font.GothamSemibold,
-        TextSize = 11,
-    })
-    uiText(settingsCard, "Reduce the panel footprint.", {
-        Position = UDim2.fromOffset(14, 99),
-        Size = UDim2.new(1, -145, 0, 15),
-        Font = Enum.Font.Gotham,
-        TextSize = 9,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
-    })
-    local compactToggle = uiButton(settingsCard, "OFF", {
-        Position = UDim2.new(1, -83, 0, 85),
-        Size = UDim2.fromOffset(66, 28),
-    })
-    local accentButton = uiButton(settingsPage, "CHANGE ACCENT", {
-        Position = UDim2.fromOffset(22, 262),
-        Size = UDim2.fromOffset(132, 30),
-    })
-    local settingsNote = uiText(settingsPage, "Panel shortcut: INSERT  •  No blur  •  No animated graphs  •  Low-frequency monitor", {
-        Position = UDim2.fromOffset(23, 305),
-        Size = UDim2.new(1, -46, 0, 34),
-        Font = Enum.Font.Gotham,
-        TextSize = 9,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
-        TextWrapped = true,
-    })
-
-    local function applyAccent()
-        accentColor = accentChoices[accentIndex]
-        logoText.TextColor3 = accentColor
-        for _, item in pairs(navItems) do item.bar.BackgroundColor3 = accentColor end
-        for _, row in pairs(spreadRows) do row.fill.BackgroundColor3 = accentColor end
-        for _, card in pairs(featureCards) do card.value.TextColor3 = accentColor end
+        task.wait(1)
     end
+end)
 
-    accentButton.Activated:Connect(function()
-        accentIndex = accentIndex % #accentChoices + 1
-        applyAccent()
-    end)
+-- Settings interactions
+KeyButton.MouseButton1Click:Connect(function()
+    WaitingForKey = true
+    KeyButton.Text = "PRESS KEY..."
+    notify("Press a key for the panel shortcut.")
+end)
 
-    monitorToggle.Activated:Connect(function()
-        monitorEnabled = not monitorEnabled
-        monitorToggle.Text = monitorEnabled and "ON" or "OFF"
-        monitorToggle.TextColor3 = monitorEnabled and Color3.fromRGB(111, 207, 151) or Color3.fromRGB(160, 166, 176)
-        if updateSystemMonitor then updateSystemMonitor() end
-    end)
+CompactButton.MouseButton1Click:Connect(function()
+    Settings.Compact = not Settings.Compact
+    CompactButton.Text = Settings.Compact and "ON" or "OFF"
+    Main.Size = Settings.Compact and UDim2.fromOffset(680, 480) or UDim2.fromOffset(760, 520)
+    notify(Settings.Compact and "Compact layout enabled." or "Standard layout enabled.")
+end)
 
-    compactToggle.Activated:Connect(function()
-        compactMode = not compactMode
-        compactToggle.Text = compactMode and "ON" or "OFF"
-        menuPanel.Size = compactMode and UDim2.fromOffset(680, 470) or UDim2.fromOffset(740, 500)
-    end)
-
-    -- Render helpers
-    local function renderPlayers()
-        if not menuPlayers or not menuPlayers.Parent then return end
-        for _, child in ipairs(menuPlayers:GetChildren()) do
-            if not child:IsA("UIListLayout") then child:Destroy() end
-        end
-
-        local roster = {}
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer then table.insert(roster, player) end
-        end
-        table.sort(roster, function(a, b) return a.Name:lower() < b.Name:lower() end)
-
-        local protected = 0
-        for index, player in ipairs(roster) do
-            local targetPlayer = player
-            local list = selectedPlayerTab == "whitelist" and Config.Triggerbot.Whitelist.List or Config.IncognitoWhitelist
-            local active = isInList(list, targetPlayer)
-            if active then protected = protected + 1 end
-
-            local row = uiCard(menuPlayers, "Player_" .. tostring(targetPlayer.UserId),
-                UDim2.new(0, 0, 0, 0), UDim2.new(1, -5, 0, 47))
-            row.LayoutOrder = index
-
-            local avatar = uiNew("ImageLabel", {
-                Name = "Avatar",
-                Position = UDim2.fromOffset(8, 6),
-                Size = UDim2.fromOffset(35, 35),
-                BackgroundColor3 = Color3.fromRGB(36, 41, 49),
-                Image = "",
-                BorderSizePixel = 0,
-            }, row)
-            uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, avatar)
-            task.spawn(function()
-                local ok, contentImage = pcall(function()
-                    return Players:GetUserThumbnailAsync(targetPlayer.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
-                end)
-                if ok and avatar.Parent then avatar.Image = contentImage end
-            end)
-
-            uiText(row, targetPlayer.DisplayName, {
-                Position = UDim2.fromOffset(54, 5),
-                Size = UDim2.new(1, -172, 0, 22),
-                Font = Enum.Font.GothamMedium,
-                TextSize = 12,
-                TextTruncate = Enum.TextTruncate.AtEnd,
-                TextColor3 = Color3.fromRGB(235, 238, 243),
-            })
-            if targetPlayer.DisplayName ~= targetPlayer.Name then
-                uiText(row, "@" .. targetPlayer.Name, {
-                    Position = UDim2.fromOffset(54, 25),
-                    Size = UDim2.new(1, -172, 0, 15),
-                    TextSize = 10,
-                    TextTruncate = Enum.TextTruncate.AtEnd,
-                    TextColor3 = Color3.fromRGB(143, 148, 157),
-                })
-            end
-
-            local eye = uiButton(row, "◉", {
-                Position = UDim2.new(1, -96, 0, 6),
-                Size = UDim2.fromOffset(32, 35),
-                BackgroundTransparency = 1,
-                TextSize = 17,
-                TextColor3 = spectateTarget == targetPlayer and accentColor or Color3.fromRGB(165, 174, 187),
-            })
-            eye.Activated:Connect(function()
-                startSpectating(targetPlayer)
-                renderMenu()
-            end)
-
-            local toggle = uiButton(row, active and "ON" or "OFF", {
-                Position = UDim2.new(1, -58, 0, 8),
-                Size = UDim2.fromOffset(48, 31),
-                TextSize = 10,
-                TextColor3 = active and Color3.fromRGB(111, 207, 151) or Color3.fromRGB(143, 151, 163),
-            })
-            toggle.Activated:Connect(function()
-                local targetList = selectedPlayerTab == "whitelist" and Config.Triggerbot.Whitelist.List or Config.IncognitoWhitelist
-                local key = tostring(targetPlayer.UserId)
-                if isInList(targetList, targetPlayer) then
-                    targetList[key] = nil
-                    targetList[targetPlayer.UserId] = nil
-                    targetList[targetPlayer.Name] = nil
-                    for k, v in pairs(targetList) do
-                        if v == targetPlayer.UserId or v == tostring(targetPlayer.UserId) or v == targetPlayer.Name then
-                            targetList[k] = nil
-                        end
-                    end
-                else
-                    targetList[key] = true
-                end
-                if camTarget == targetPlayer and not onWhitelist(targetPlayer) then camTarget = nil end
-                refreshESP()
-                renderMenu()
-            end)
-        end
-
-        if #roster == 0 then
-            uiText(menuPlayers, "Nenhum outro jogador na sessao.", {
-                Size = UDim2.new(1, -20, 0, 42),
-                TextSize = 12,
-                TextColor3 = Color3.fromRGB(145, 150, 159),
-                TextXAlignment = Enum.TextXAlignment.Center,
-            })
-        end
-
-        local labelText = selectedPlayerTab == "whitelist" and "PROTECTED PLAYERS" or "HIDDEN PLAYERS"
-        menuCount.Text = string.format("%s  •  %d entries  •  INSERT to toggle", labelText, protected)
+local function applyAccent()
+    Theme.Accent = AccentOptions[Settings.AccentName]
+    LogoText.TextColor3 = Theme.Accent
+    for _, item in pairs(NavItems) do
+        item.Indicator.BackgroundColor3 = Theme.Accent
     end
+end
 
-    renderMenu = function()
-        for pageName, pageFrame in pairs(pages) do
-            local activePage = pageName:lower() == selectedTab
-            pageFrame.Visible = activePage
-            if activePage and lastRenderedTab ~= selectedTab then
-                pageFrame.Position = UDim2.fromOffset(8, 0)
-                playUiTween(pageFrame, PAGE_IN, {Position = UDim2.fromOffset(0, 0)})
-            end
-        end
-        lastRenderedTab = selectedTab
-
-        for name, item in pairs(navItems) do
-            local active = name:lower() == selectedTab
-            local wasActive = item.active
-            item.active = active
-            if active then
-                item.bar.Visible = true
-                if not wasActive then
-                    item.bar.Size = UDim2.fromOffset(3, 0)
-                    playUiTween(item.bar, PAGE_IN, {Size = UDim2.fromOffset(3, 25)})
-                end
-            else
-                item.bar.Visible = false
-                item.bar.Size = UDim2.fromOffset(3, 0)
-            end
-            item.button.BackgroundTransparency = active and 0 or 1
-            item.button.BackgroundColor3 = active and Color3.fromRGB(25, 30, 37) or Color3.fromRGB(17, 20, 25)
-            item.title.TextColor3 = active and Color3.fromRGB(241, 244, 249) or Color3.fromRGB(135, 146, 161)
-            item.icon.TextColor3 = active and accentColor or Color3.fromRGB(135, 146, 161)
-            item.stroke.Transparency = active and 0.72 or 1
-        end
-
-        if selectedTab == "players" then
-            tabWhitelist.BackgroundColor3 = selectedPlayerTab == "whitelist" and Color3.fromRGB(38, 47, 58) or Color3.fromRGB(29, 33, 40)
-            tabIncognito.BackgroundColor3 = selectedPlayerTab == "incognito" and Color3.fromRGB(38, 47, 58) or Color3.fromRGB(29, 33, 40)
-            renderPlayers()
-        elseif selectedTab == "system" then
-            updateSystemMonitor()
-        elseif selectedTab == "overview" then
-            refreshDashboard()
-        elseif selectedTab == "spread" then
-            for _, item in ipairs(spreadNames) do updateSpreadRow(item.key) end
-            local patched = (spreadPatched["[Double-Barrel SG]"] or 0)
-                + (spreadPatched["[TacticalShotgun]"] or 0)
-                + (spreadPatched["[Revolver]"] or 0)
-            spreadInfo.Text = string.format("Matched functions: %d  |  patched constants: %d", spreadCandidatesSeen, patched)
-        end
+AccentButton.MouseButton1Click:Connect(function()
+    if Settings.AccentName == "Ice" then
+        Settings.AccentName = "Mint"
+    elseif Settings.AccentName == "Mint" then
+        Settings.AccentName = "Violet"
+    else
+        Settings.AccentName = "Ice"
     end
+    AccentButton.Text = Settings.AccentName
+    applyAccent()
+    addLog("Accent changed to " .. Settings.AccentName .. ".", "ok")
+    notify("Accent: " .. Settings.AccentName)
+end)
 
-    for name, item in pairs(navItems) do
-        item.button.Activated:Connect(function()
-            selectedTab = name:lower()
-            renderMenu()
-        end)
-    end
-
-    tabWhitelist.Activated:Connect(function()
-        selectedPlayerTab = "whitelist"
-        renderMenu()
-    end)
-    tabIncognito.Activated:Connect(function()
-        selectedPlayerTab = "incognito"
-        renderMenu()
-    end)
-
+-- Drag from the header.
+do
     local dragging = false
-    local dragOrigin, startPosition
-    header.InputBegan:Connect(function(input)
+    local dragStart = nil
+    local startPosition = nil
+
+    Header.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
-            dragOrigin = input.Position
-            startPosition = menuPanel.Position
+            dragStart = input.Position
+            startPosition = Main.Position
             input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
             end)
         end
     end)
-    connectSignal(UserInputService.InputChanged, function(input)
+
+    UserInputService.InputChanged:Connect(function(input)
         if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local delta = input.Position - dragOrigin
-            menuPanel.Position = UDim2.new(
+            local delta = input.Position - dragStart
+            Main.Position = UDim2.new(
                 startPosition.X.Scale, startPosition.X.Offset + delta.X,
                 startPosition.Y.Scale, startPosition.Y.Offset + delta.Y
             )
         end
     end)
-    connectSignal(UserInputService.InputEnded, function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-        end
-    end)
-
-    minimize.Activated:Connect(function()
-        body.Visible = not body.Visible
-        menuPanel.Size = body.Visible
-            and (compactMode and UDim2.fromOffset(680, 470) or UDim2.fromOffset(740, 500))
-            or UDim2.fromOffset(740, 66)
-        minimize.Text = body.Visible and "–" or "+"
-    end)
-
-    close.Activated:Connect(function()
-        menuVisible = false
-        if menuGui then menuGui.Enabled = false end
-    end)
-
-    renderMenu()
 end
 
-buildMenu()
-
-connectSignal(RunService.RenderStepped, function(dt)
-    if menuVisible and selectedTab == "system" and monitorEnabled then
-        fpsFrameCount = fpsFrameCount + 1
-        fpsElapsed = fpsElapsed + dt
-    else
-        fpsFrameCount = 0
-        fpsElapsed = 0
-    end
-    if fpsElapsed >= 1 then
-        currentFPS = math.floor((fpsFrameCount / fpsElapsed) + 0.5)
-        fpsFrameCount = 0
-        fpsElapsed = 0
-    end
+local Minimized = false
+MinimizeButton.MouseButton1Click:Connect(function()
+    Minimized = not Minimized
+    Body.Visible = not Minimized
+    Main.Size = Minimized and UDim2.fromOffset(760, 70)
+        or (Settings.Compact and UDim2.fromOffset(680, 480) or UDim2.fromOffset(760, 520))
+    MinimizeButton.Text = Minimized and "+" or "–"
+    refreshFrameSampler()
 end)
 
-connectSignal(UserInputService.InputBegan, function(input, processed)
-    if processed or input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-    if input.KeyCode == panelKey and menuGui then
-        menuVisible = not menuVisible
-        menuGui.Enabled = menuVisible
-        if menuVisible then
-            panelScale.Scale = 0.985
-            playUiTween(panelScale, PAGE_IN, {Scale = 1})
-            if renderMenu then renderMenu() end
+CloseButton.MouseButton1Click:Connect(function()
+    Main.Visible = false
+    refreshFrameSampler()
+end)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if WaitingForKey then
+        if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode ~= Enum.KeyCode.Unknown then
+            Settings.OpenKey = input.KeyCode
+            KeyButton.Text = Settings.OpenKey.Name
+            WaitingForKey = false
+            addLog("Shortcut changed to " .. Settings.OpenKey.Name .. ".", "ok")
+            notify("Shortcut updated")
         end
-    end
-end)
-
-connectSignal(Players.PlayerAdded, function()
-    if renderMenu and menuGui and menuGui.Parent and selectedTab == "players" then
-        renderMenu()
-    end
-end)
-
-connectSignal(Players.PlayerRemoving, function(player)
-    if spectateTarget == player then stopSpectating() end
-    task.defer(function()
-        if renderMenu and menuGui and menuGui.Parent and selectedTab == "players" then
-            renderMenu()
-        end
-    end)
-end)
-
-connectSignal(RunService.Heartbeat, function(dt)
-    if spectateTarget and spectateTarget.Parent == Players then
-        local hum = humanoidOf(charOf(spectateTarget))
-        local cam = camera()
-        if hum and cam and cam.CameraSubject ~= hum then
-            cam.CameraType = Enum.CameraType.Custom
-            cam.CameraSubject = hum
-        end
-    end
-
-    if not menuVisible then
-        monitorRefreshElapsed = 0
-        dashboardRefreshElapsed = 0
         return
     end
 
-    if selectedTab == "system" and monitorEnabled then
-        monitorRefreshElapsed = monitorRefreshElapsed + (dt or 0)
-        if monitorRefreshElapsed >= 1 then
-            monitorRefreshElapsed = 0
-            if updateSystemMonitor then updateSystemMonitor() end
-        end
-    else
-        monitorRefreshElapsed = 0
-    end
+    if gameProcessed then return end
 
-    if selectedTab == "overview" then
-        dashboardRefreshElapsed = dashboardRefreshElapsed + (dt or 0)
-        if dashboardRefreshElapsed >= 1 then
-            dashboardRefreshElapsed = 0
-            refreshDashboard()
+    if input.KeyCode == Settings.OpenKey then
+        if Minimized then
+            Minimized = false
+            Body.Visible = true
+            Main.Size = Settings.Compact and UDim2.fromOffset(680, 480) or UDim2.fromOffset(760, 520)
+            MinimizeButton.Text = "–"
+        else
+            Main.Visible = not Main.Visible
         end
-    else
-        dashboardRefreshElapsed = 0
+        refreshFrameSampler()
     end
-
 end)
 
-local function stop()
-    if not running then return end
-    running = false
-    stopSpectating()
-    if menuGui and menuGui.Parent then menuGui:Destroy() end
-    menuGui = nil
-    for _, conn in ipairs(connections) do
-        pcall(function() conn:Disconnect() end)
-    end
-    for player in pairs(espObjects) do clearESP(player) end
-    restoreHitboxes()
-    restoreSpread()
-    if env.DHC_Stop == stop then env.DHC_Stop = nil end
-    if env.DHC_Status == status then env.DHC_Status = nil end
-    print("[V4ware V20] Parado; menu fechado e constantes restauradas onde possivel.")
-end
+Main:GetPropertyChangedSignal("Visible"):Connect(refreshFrameSampler)
 
-env.DHC_Stop = stop
-env.DHC_Status = status
-refreshESP()
-updateHitboxes()
-updateSpread()
-print("[V4ware V20] Iniciado: INSERT menu (Overview / Players / Spread / System / Settings) | Pulo somente COM OS PES APOIADOS; sem buffer, sem voo e sem cooldown artificial")
-print("[V4ware V20] Trigger: delay cliente 0 | DB 180 | Revolver 260 | Tactical 180 | limite geral 280 studs")
-print("[V4ware V20] Menu: INSERT | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
-warn("[V4ware V20] Experimento de patch de CONSTANTES especificas. Sem hook FireServer; resultado real nao testado.")
-print("[V4ware WS] Weapon Switch ativo: V -> DB / Tactical / Revolver, respeitando cooldowns do jogo")
+-- Startup
+setPage("Overview")
+HitboxStatus.Text = string.format("%d tagged test dummy(s) found  •  Tag: %s", countTaggedDummies(), DUMMY_TAG)
+addLog("V4ware V22 Studio QA initialized.", "ok")
+addLog("Hitbox Lab is visual-only and restricted to tagged NPC test dummies.", "ok")
+refreshFrameSampler()
+
+print("[V4ware V22] Studio QA panel ready.")
