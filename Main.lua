@@ -1,4 +1,4 @@
--- V4WARE V20.2 - PREMIUM HOVER + HITBOX SETTINGS (base V20.1 preservada, Config separada)
+-- V4WARE V20.4 - ESP 0.1s + UI MONITOR OTIMIZADO (base V20.2 preservada, Config separada)
 -- Este arquivo pressupoe que a tabela global Config ja existe no ambiente que o carrega.
 -- Mantenha a configuracao no arquivo/trecho local e hospede este arquivo como Main.lua.
 
@@ -45,6 +45,14 @@ Config.HitboxExpander.Transparency = math.clamp(tonumber(Config.HitboxExpander.T
 if typeof(Config.HitboxExpander.Color) ~= "Color3" then
     Config.HitboxExpander.Color = Color3.fromRGB(255, 60, 60)
 end
+
+-- Intervalo do ESP: padrao de 0.1s (10 atualizacoes por segundo).
+-- Pode ser ajustado pela Config.ESP.RefreshTime, respeitando o minimo de 0.05s.
+if type(Config.ESP) ~= "table" then
+    Config.ESP = {}
+end
+Config.ESP.RefreshTime = math.clamp(tonumber(Config.ESP.RefreshTime) or 0.1, 0.05, 1)
+
 local spectateTarget = nil
 local spectateOldType = nil
 local spectateOldSubject = nil
@@ -1258,8 +1266,11 @@ connectSignal(RunService.Heartbeat, function()
     if not running then return end
     local now = os.clock()
     if now >= nextESP then
-        nextESP = now + 0.4
-        refreshESP()
+        nextESP = now + Config.ESP.RefreshTime
+        -- Evita varrer a lista de jogadores quando o ESP está desligado.
+        if espActive and Config.ESP.Enabled then
+            refreshESP()
+        end
     end
     if now >= nextHitbox then
         nextHitbox = now + math.max(0.05, tonumber(Config.HitboxExpander.RefreshTime) or 1)
@@ -1279,7 +1290,7 @@ local function status()
     local localMatches = {}
     for name, count in pairs(spreadMatches) do localMatches[name] = count end
     return {
-        Version = 20,
+        Version = 20.4,
         Running = running,
         InfiniteJump = false,
         NoJumpCooldown = Config.Movement["No Jump Cooldown"],
@@ -1360,6 +1371,9 @@ local panelScale
 local selectedTab = "overview"
 local selectedPlayerTab = "whitelist"
 local menuVisible = false
+local menuBodyVisible = true
+local fpsCounterConnection = nil
+local syncFPSCounter
 local renderMenu
 local updateSystemMonitor
 local refreshDashboard
@@ -2504,6 +2518,7 @@ local function buildMenu()
         monitorToggle.Text = monitorEnabled and "ON" or "OFF"
         monitorToggle.TextColor3 = monitorEnabled and Color3.fromRGB(111, 207, 151) or Color3.fromRGB(160, 166, 176)
         if updateSystemMonitor then updateSystemMonitor() end
+        if syncFPSCounter then syncFPSCounter() end
     end)
 
     compactToggle.Activated:Connect(function()
@@ -2674,6 +2689,8 @@ local function buildMenu()
             hitboxVisibleButton.Text = hitboxCfg.Visible and "VISIBLE" or "HIDDEN"
             refreshHitboxStatus()
         end
+
+        if syncFPSCounter then syncFPSCounter() end
     end
 
     for name, item in pairs(navItems) do
@@ -2721,15 +2738,21 @@ local function buildMenu()
 
     minimize.Activated:Connect(function()
         body.Visible = not body.Visible
+        menuBodyVisible = body.Visible
         menuPanel.Size = body.Visible
             and (compactMode and UDim2.fromOffset(680, 470) or UDim2.fromOffset(740, 500))
             or UDim2.fromOffset(740, 66)
         minimize.Text = body.Visible and "–" or "+"
+        if syncFPSCounter then syncFPSCounter() end
+        if body.Visible and selectedTab == "system" and monitorEnabled and updateSystemMonitor then
+            updateSystemMonitor()
+        end
     end)
 
     close.Activated:Connect(function()
         menuVisible = false
         if menuGui then menuGui.Enabled = false end
+        if syncFPSCounter then syncFPSCounter() end
     end)
 
     renderMenu()
@@ -2737,20 +2760,42 @@ end
 
 buildMenu()
 
-connectSignal(RunService.RenderStepped, function(dt)
-    if menuVisible and selectedTab == "system" and monitorEnabled then
-        fpsFrameCount = fpsFrameCount + 1
-        fpsElapsed = fpsElapsed + dt
-    else
+-- FPS sampler sob demanda: não mantém callback RenderStepped quando o monitor
+-- não está visível/ativo. A medição continua com janela de 1 segundo.
+syncFPSCounter = function()
+    local shouldSample = running
+        and menuVisible
+        and menuBodyVisible
+        and menuGui ~= nil
+        and menuGui.Enabled
+        and selectedTab == "system"
+        and monitorEnabled
+
+    if shouldSample then
+        if not fpsCounterConnection then
+            fpsFrameCount = 0
+            fpsElapsed = 0
+            fpsCounterConnection = RunService.RenderStepped:Connect(function(dt)
+                if not running then return end
+                fpsFrameCount = fpsFrameCount + 1
+                fpsElapsed = fpsElapsed + dt
+                if fpsElapsed >= 1 then
+                    currentFPS = math.floor((fpsFrameCount / fpsElapsed) + 0.5)
+                    fpsFrameCount = 0
+                    fpsElapsed = 0
+                end
+            end)
+        end
+    elseif fpsCounterConnection then
+        pcall(function() fpsCounterConnection:Disconnect() end)
+        fpsCounterConnection = nil
         fpsFrameCount = 0
         fpsElapsed = 0
+        currentFPS = 0
     end
-    if fpsElapsed >= 1 then
-        currentFPS = math.floor((fpsFrameCount / fpsElapsed) + 0.5)
-        fpsFrameCount = 0
-        fpsElapsed = 0
-    end
-end)
+end
+
+syncFPSCounter()
 
 connectSignal(UserInputService.InputBegan, function(input, processed)
     if processed or input.UserInputType ~= Enum.UserInputType.Keyboard then return end
@@ -2762,6 +2807,7 @@ connectSignal(UserInputService.InputBegan, function(input, processed)
             playUiTween(panelScale, PAGE_IN, {Scale = 1})
             if renderMenu then renderMenu() end
         end
+        if syncFPSCounter then syncFPSCounter() end
     end
 end)
 
@@ -2790,7 +2836,7 @@ connectSignal(RunService.Heartbeat, function(dt)
         end
     end
 
-    if not menuVisible then
+    if not menuVisible or not menuBodyVisible or not menuGui or not menuGui.Enabled then
         monitorRefreshElapsed = 0
         dashboardRefreshElapsed = 0
         return
@@ -2821,6 +2867,10 @@ end)
 local function stop()
     if not running then return end
     running = false
+    if fpsCounterConnection then
+        pcall(function() fpsCounterConnection:Disconnect() end)
+        fpsCounterConnection = nil
+    end
     stopSpectating()
     if menuGui and menuGui.Parent then menuGui:Destroy() end
     menuGui = nil
@@ -2832,7 +2882,7 @@ local function stop()
     restoreSpread()
     if env.DHC_Stop == stop then env.DHC_Stop = nil end
     if env.DHC_Status == status then env.DHC_Status = nil end
-    print("[V4ware V20.2] Parado; menu fechado e constantes restauradas onde possivel.")
+    print("[V4ware V20.4] Parado; menu fechado e constantes restauradas onde possivel.")
 end
 
 env.DHC_Stop = stop
@@ -2840,8 +2890,8 @@ env.DHC_Status = status
 refreshESP()
 updateHitboxes()
 updateSpread()
-print("[V4ware V20.2] Iniciado: INSERT menu (Overview / Players / Spread / Hitbox / System / Settings) | Pulo somente COM OS PES APOIADOS; sem buffer, sem voo e sem cooldown artificial")
+print("[V4ware V20.4] Iniciado: INSERT menu (Overview / Players / Spread / Hitbox / System / Settings) | Pulo somente COM OS PES APOIADOS; sem buffer, sem voo e sem cooldown artificial")
 print("[V4ware V20] Trigger: delay cliente 0 | DB 180 | Revolver 260 | Tactical 180 | limite geral 280 studs")
-print("[V4ware V20.2] Menu: INSERT | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
+print("[V4ware V20.4] Menu: INSERT | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
 warn("[V4ware V20] Experimento de patch de CONSTANTES especificas. Sem hook FireServer; resultado real nao testado.")
 print("[V4ware WS] Weapon Switch ativo: V -> DB / Tactical / Revolver, respeitando cooldowns do jogo")
