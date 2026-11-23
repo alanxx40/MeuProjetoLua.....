@@ -1,1818 +1,729 @@
--- V4WARE V19 - SYSTEM MONITOR (Main remoto, Config separada)
--- Este arquivo pressupoe que a tabela global Config ja existe no ambiente que o carrega.
--- Mantenha a configuracao no arquivo/trecho local e hospede este arquivo como Main.lua.
+--[[
+    V4ware V20 - Clean Control Center
+    Lightweight UI / diagnostics shell for an experience you own or are authorized to test.
 
--- =============================================================
--- SERVICOS, ESTADO E LIMPEZA DE EXECUCOES ANTERIORES
--- =============================================================
+    Install as a LocalScript in StarterPlayerScripts or StarterGui in Roblox Studio.
+    This file creates UI and reads client performance stats only.
+    It does not load remote code, modify weapons, target players, or bypass game systems.
+]]
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local Workspace = game:GetService("Workspace")
 local Stats = game:GetService("Stats")
-local LocalPlayer = Players.LocalPlayer
-local sessionStartedAt = os.clock()
-local env = (type(getgenv) == "function" and getgenv()) or _G
+local UserInputService = game:GetService("UserInputService")
 
-local oldCfg = env.DHC_Config
-if type(env.DHC_Stop) == "function" then
-    pcall(env.DHC_Stop)
-end
-if type(oldCfg) == "table" then
-    if oldCfg.Triggerbot and oldCfg.Triggerbot.Whitelist and type(oldCfg.Triggerbot.Whitelist.List) == "table" then
-        Config.Triggerbot.Whitelist.List = oldCfg.Triggerbot.Whitelist.List
-    end
-    if type(oldCfg.IncognitoWhitelist) == "table" then
-        Config.IncognitoWhitelist = oldCfg.IncognitoWhitelist
-    end
+local localPlayer = Players.LocalPlayer
+local playerGui = localPlayer:WaitForChild("PlayerGui")
+
+local OLD_GUI_NAME = "V4wareV20"
+local oldGui = playerGui:FindFirstChild(OLD_GUI_NAME)
+if oldGui then
+    oldGui:Destroy()
 end
 
-env.DHC_Config = Config
-local spectateTarget = nil
-local spectateOldType = nil
-local spectateOldSubject = nil
-local running = true
-local connections = {}
-local espObjects = {}
-local hitboxOriginal = {}
-local spreadOriginal = {} -- [funcao] = { gun="...", values={[indice]=valor_original} }
-local spreadPatched = { ["[Double-Barrel SG]"] = 0, ["[TacticalShotgun]"] = 0, ["[Revolver]"] = 0 }
-local spreadCandidatesSeen = 0
-local spreadAttempted = false
-local spreadLastError = nil
-local triggerActive = false
--- Weapon Switch: uma tecla executa a sequencia de armas, sem alterar cooldowns do jogo.
-local weaponSwitchBusy = false
-local weaponSwitchLastStart = -1e9
-local weaponSwitchLastResult = "Ainda nao acionado"
-local weaponSwitchLastError = nil
-local weaponSwitchLastAttempts = 0
-local weaponSwitchLastSkipped = 0
-local rightMouseHeld = false
-local espActive = Config.ESP.Enabled
-local camActive = false
-local camTarget = nil
-local lastShot = 0
-local nextESP = 0
-local nextHitbox = 0
-local nextSpread = 0
-local nextReset = 0
-local warnedHitbox = false
-local warnedSpread = false
-local spreadMatches = spreadPatched
+local Theme = {
+    background = Color3.fromRGB(12, 13, 16),
+    panel = Color3.fromRGB(17, 19, 23),
+    surface = Color3.fromRGB(23, 26, 31),
+    surfaceHover = Color3.fromRGB(30, 34, 40),
+    stroke = Color3.fromRGB(43, 47, 55),
+    text = Color3.fromRGB(239, 242, 247),
+    muted = Color3.fromRGB(139, 146, 158),
+    accent = Color3.fromRGB(222, 230, 242),
+    green = Color3.fromRGB(102, 205, 151),
+    red = Color3.fromRGB(229, 112, 112),
+}
 
-local function connectSignal(signal, callback)
-    local connection = signal:Connect(callback)
-    table.insert(connections, connection)
-    return connection
+local ACCENTS = {
+    Silver = Color3.fromRGB(222, 230, 242),
+    Ice = Color3.fromRGB(133, 196, 230),
+}
+
+local SETTINGS = {
+    openKey = Enum.KeyCode.Insert,
+    monitorEnabled = true,
+    compact = false,
+    accentName = "Silver",
+}
+
+local function create(className, parent, properties)
+    local object = Instance.new(className)
+    for property, value in pairs(properties or {}) do
+        object[property] = value
+    end
+    object.Parent = parent
+    return object
 end
 
-local function charOf(player)
-    return player and player.Character or nil
+local function corner(parent, radius)
+    return create("UICorner", parent, {
+        CornerRadius = UDim.new(0, radius or 10),
+    })
 end
 
-local function humanoidOf(character)
-    return character and character:FindFirstChildOfClass("Humanoid") or nil
+local function stroke(parent, color, transparency)
+    return create("UIStroke", parent, {
+        Color = color or Theme.stroke,
+        Transparency = transparency or 0,
+        Thickness = 1,
+    })
 end
 
-local function rootOf(character)
-    return character and character:FindFirstChild("HumanoidRootPart") or nil
-end
-
-local function equippedTool()
-    local character = charOf(LocalPlayer)
-    return character and character:FindFirstChildOfClass("Tool") or nil
-end
-
-local function camera()
-    return Workspace.CurrentCamera
-end
-
-local function pressed(input, key)
-    return input.UserInputType == Enum.UserInputType.Keyboard
-        and input.KeyCode == Enum.KeyCode[tostring(key)]
-end
-
-local function knife(tool)
-    if not tool then return false end
-    for _, name in ipairs(Config.Triggerbot.KnifeNames) do
-        if string.find(string.lower(tool.Name), string.lower(name), 1, true) then
-            return true
-        end
-    end
-    return false
-end
-
-local function flag(character, name)
-    if not character then return false end
-    if character:GetAttribute(name) == true then return true end
-    local thing = character:FindFirstChild(name, true)
-    return thing ~= nil and thing:IsA("BoolValue") and thing.Value == true
-end
-
-local function knocked(character)
-    return flag(character, "K.O") or flag(character, "Knocked") or flag(character, "KO")
-end
-
-local function grabbed(character)
-    return flag(character, "Grabbed")
-        or (character ~= nil and character:FindFirstChild("GRABBING_CONSTRAINT", true) ~= nil)
-end
-
-local function crew(player)
-    local folder = player and player:FindFirstChild("DataFolder")
-    local info = folder and folder:FindFirstChild("Information")
-    local value = info and info:FindFirstChild("Crew")
-    if value and value:IsA("StringValue") then return value.Value end
-    return nil
-end
-
-local function isInList(list, player)
-    if type(list) ~= "table" or not player then return false end
-    if list[player.Name] == true or list[player.UserId] == true or list[tostring(player.UserId)] == true then
-        return true
-    end
-    for key, value in pairs(list) do
-        if (value == true and (tostring(key) == player.Name or tostring(key) == tostring(player.UserId)))
-            or (value ~= true and (tostring(value) == player.Name or tostring(value) == tostring(player.UserId))) then
-            return true
-        end
-    end
-    return false
-end
-
-local function isWhitelisted(player)
-    local w = Config.Triggerbot.Whitelist
-    return w.Enabled and isInList(w.List, player)
-end
-
-local function isIncognito(player)
-    return isInList(Config.IncognitoWhitelist, player)
-end
-
--- Whitelist da interface e PROTECAO: jogadores marcados nao viram alvo.
-local function onWhitelist(player)
-    return not isWhitelisted(player) and not isIncognito(player)
-end
-
-local function passes(player, checks)
-    if not player or player == LocalPlayer or not onWhitelist(player) then return false end
-    local character = charOf(player)
-    local hum = humanoidOf(character)
-    if not character or not hum or hum.Health <= 0 then return false end
-    checks = checks or {}
-    if checks.ForceField and character:FindFirstChildOfClass("ForceField") then return false end
-    if checks.Knocked and knocked(character) then return false end
-    if checks.Grabbed and grabbed(character) then return false end
-    if checks.SelfKnocked and knocked(charOf(LocalPlayer)) then return false end
-    if checks.Friend then
-        local ok, yes = pcall(function() return LocalPlayer:IsFriendsWith(player.UserId) end)
-        if ok and yes then return false end
-    end
-    if checks.Crew then
-        local mine, theirs = crew(LocalPlayer), crew(player)
-        if mine and mine ~= "" and mine == theirs then return false end
-    end
-    return true
-end
-
-local function visible(part, character)
-    local cam = camera()
-    if not cam or not part then return false end
-    local difference = part.Position - cam.CFrame.Position
-    if difference.Magnitude < 0.01 then return true end
-    local filter = {}
-    if charOf(LocalPlayer) then table.insert(filter, charOf(LocalPlayer)) end
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = filter
-    params.IgnoreWater = true
-    local hit = Workspace:Raycast(cam.CFrame.Position, difference, params)
-    return hit == nil or (character and hit.Instance:IsDescendantOf(character))
-end
-
-local function playerFromPart(part)
-    local item = part
-    while item and item ~= Workspace do
-        if item:IsA("Model") then
-            local player = Players:GetPlayerFromCharacter(item)
-            if player then return player end
-        end
-        item = item.Parent
-    end
-    return nil
-end
-
-local function aimPart(character)
-    local cam = camera()
-    if not cam or not character then return nil, math.huge end
-    local mousePos = UserInputService:GetMouseLocation()
-    local candidate, distance = nil, math.huge
-    local names = { "Head", "UpperTorso", "Torso", "HumanoidRootPart", "LowerTorso" }
-    for _, name in ipairs(names) do
-        local part = character:FindFirstChild(name)
-        if part and part:IsA("BasePart") then
-            local onScreenPos, onScreen = cam:WorldToViewportPoint(part.Position)
-            if onScreen then
-                local d = (Vector2.new(onScreenPos.X, onScreenPos.Y) - mousePos).Magnitude
-                if d < distance then
-                    distance, candidate = d, part
-                end
-            end
-        end
-    end
-    return candidate, distance
-end
-
--- =============================================================
--- CAMLOCK (CLIENT-SIDE CAMERA)
--- =============================================================
-local function findCamTarget()
-    local bestPlayer = nil
-    local distance = math.max(0, tonumber(Config.Camlock.FOV.Size) or 30)
-    for _, player in ipairs(Players:GetPlayers()) do
-        if passes(player, { ForceField = true, SelfKnocked = true }) then
-            local part, d = aimPart(charOf(player))
-            if part and d <= distance then
-                if not Config.Camlock.Checks.Wall or visible(part, charOf(player)) then
-                    bestPlayer, distance = player, d
-                end
-            end
-        end
-    end
-    return bestPlayer
-end
-
-local function camAllowed()
-    if spectateTarget or not Config.Camlock.Enabled or not camActive then return false end
-    if Config.Camlock.Checks.RightClicking and not rightMouseHeld then return false end
-    if Config.Camlock.Checks.Knife and knife(equippedTool()) then return false end
-    local cam = camera()
-    local char = charOf(LocalPlayer)
-    local head = char and char:FindFirstChild("Head")
-    if not cam or not head then return false end
-    local fp = (cam.CFrame.Position - head.Position).Magnitude <= 1.6
-    if fp and not Config.Camlock.Checks.FirstPerson then return false end
-    if not fp and not Config.Camlock.Checks.ThirdPerson then return false end
-    return true
-end
-
-local function updateCam(dt)
-    if not camAllowed() then return end
-    if not camTarget or not passes(camTarget) then
-        camTarget = findCamTarget()
-    end
-    if not camTarget then return end
-    local character = charOf(camTarget)
-    local part = aimPart(character)
-    if not part then camTarget = nil return end
-    if Config.Camlock.Checks.Wall and not visible(part, character) then
-        if not Config.Camlock.Sticky then camTarget = nil end
-        return
-    end
-    local dest = part.Position
-    local targetHumanoid = humanoidOf(character)
-    local airborne = targetHumanoid and targetHumanoid.FloorMaterial == Enum.Material.Air
-    if Config.Camlock.Prediction.Enabled then
-        local ahead = airborne and Config.Camlock.Prediction.Air or Config.Camlock.Prediction.Ground
-        dest = dest + part.AssemblyLinearVelocity * (tonumber(ahead) or 0)
-    end
-    local cam = camera()
-    if not cam or (dest - cam.CFrame.Position).Magnitude < 0.01 then return end
-    local goal = CFrame.lookAt(cam.CFrame.Position, dest)
-    if Config.Camlock.Smoothing.Enabled then
-        local s = airborne and Config.Camlock.Smoothing.Air or Config.Camlock.Smoothing.Ground
-        s = math.clamp((tonumber(s) or 0) * (tonumber(Config.Camlock.Scale) or 1), 0, 1)
-        local alpha = 1 - math.pow(1 - s, math.max(dt, 0) * 60)
-        cam.CFrame = cam.CFrame:Lerp(goal, alpha)
-    else
-        cam.CFrame = goal
-    end
-end
-
--- =============================================================
--- TRIGGERBOT (TENTA ACIONAR TOOL; NAO IGNORA VALIDACOES DO JOGO)
--- =============================================================
-local function attemptShot(tool)
-    -- Usar o evento natural Tool:Activate para nao depender de codigo remoto.
-    -- Alguns jogos so disparam pela entrada real do mouse: nesse caso nao funcionara.
-    local ok = pcall(function() tool:Activate() end)
-    if ok then lastShot = os.clock() end
-end
-
-local function updateTrigger()
-    if weaponSwitchBusy then return end -- evita disparos concorrentes durante a sequencia
-    if not Config.Triggerbot.Enabled or not triggerActive then return end
-    -- FireDelay=0: nenhuma espera artificial antes de tentar Tool:Activate().
-    -- Executa a checagem a cada RenderStepped; nao acelera a cadencia imposta pelo jogo.
-    local clientDelay = math.max(0, tonumber(Config.Triggerbot.FireDelay) or 0)
-    if clientDelay > 0 and os.clock() - lastShot < clientDelay then return end
-    local tool = equippedTool()
-    if not tool or knife(tool) then return end
-    local range = Config.Triggerbot["Range-Check"]
-    local maxDist = range.Data[tool.Name]
-    if range.Enabled and maxDist == nil then return end
-    local cam = camera()
-    if not cam then return end
-    local mouse = UserInputService:GetMouseLocation()
-    local ray = cam:ViewportPointToRay(mouse.X, mouse.Y)
-    local filter = {}
-    if charOf(LocalPlayer) then table.insert(filter, charOf(LocalPlayer)) end
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = filter
-    params.IgnoreWater = true
-    -- Limite real: aplica distancia maxima por arma e teto global.
-    local length = math.clamp(tonumber(maxDist) or 0, 0, math.max(1, tonumber(range.HardCap) or 280))
-    if length <= 0 then return end
-    local hit = Workspace:Raycast(ray.Origin, ray.Direction * length, params)
-    if not hit then return end
-    local target = playerFromPart(hit.Instance)
-    if not target or not onWhitelist(target) then return end
-    -- Segunda verificacao: distancia entre personagens, nao apenas camera e alvo.
-    local myRoot = rootOf(charOf(LocalPlayer))
-    local targetRoot = rootOf(charOf(target))
-    if not myRoot or not targetRoot then return end
-    if (targetRoot.Position - myRoot.Position).Magnitude > length then return end
-    if Config.Triggerbot.Hitbox.Enabled and not passes(target, Config.Triggerbot.Hitbox.Checks) then return end
-    if not passes(target) then return end
-    if Config.Triggerbot.Hitbox.Checks.Visible and not visible(hit.Instance, charOf(target)) then return end
-    attemptShot(tool)
-end
-
--- =============================================================
--- ESP: HIGHLIGHT + NOME, VISUALIZACAO CLIENTE
--- =============================================================
-local function clearESP(player)
-    local entry = espObjects[player]
-    if not entry then return end
-    if entry.tag then entry.tag:Destroy() end
-    if entry.highlight then entry.highlight:Destroy() end
-    espObjects[player] = nil
-end
-
-local function refreshESP()
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            local char = charOf(player)
-            local head = char and char:FindFirstChild("Head")
-            local hum = humanoidOf(char)
-            local entry = espObjects[player]
-            if not espActive or not Config.ESP.Enabled or isIncognito(player) or not head or not hum or hum.Health <= 0 then
-                clearESP(player)
-            elseif not entry or entry.character ~= char then
-                clearESP(player)
-                local h = Instance.new("Highlight")
-                h.Name = "DHC_ESP_Highlight"
-                h.Adornee = char
-                h.FillTransparency = 0.85
-                h.OutlineTransparency = 0
-                h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                h.Parent = char
-
-                local gui = Instance.new("BillboardGui")
-                gui.Name = "DHC_ESP_Name"
-                gui.Adornee = head
-                gui.Size = UDim2.fromOffset(180, 28)
-                gui.StudsOffset = Vector3.new(0, 2.6, 0)
-                gui.AlwaysOnTop = true
-                gui.Parent = head
-
-                local label = Instance.new("TextLabel")
-                label.Name = "Name"
-                label.BackgroundTransparency = 1
-                label.Size = UDim2.fromScale(1, 1)
-                label.Font = Enum.Font.GothamBold
-                label.TextColor3 = Color3.new(1, 1, 1)
-                label.TextStrokeTransparency = 0.4
-                label.TextSize = tonumber(Config.ESP.Size) or 8
-                label.Text = player.DisplayName
-                label.Parent = gui
-                espObjects[player] = {character = char, highlight = h, tag = gui, label = label}
-            else
-                entry.label.TextSize = tonumber(Config.ESP.Size) or 8
-            end
-        end
-    end
-end
-
--- =============================================================
--- HITBOX EXPANDER: SOMENTE ALTERACAO LOCAL DO HUMANOIDROOTPART
--- =============================================================
-local function restoreHitboxes()
-    for part, old in pairs(hitboxOriginal) do
-        if part.Parent then
-            pcall(function()
-                part.Size = old.Size
-                part.Transparency = old.Transparency
-                part.Color = old.Color
-                part.CanCollide = old.CanCollide
-            end)
-        end
-        hitboxOriginal[part] = nil
-    end
-end
-
-local function updateHitboxes()
-    local cfg = Config.HitboxExpander
-    if not cfg.Enabled then
-        if next(hitboxOriginal) then restoreHitboxes() end
-        return
-    end
-    if cfg.BloodBypass and not warnedHitbox then
-        warnedHitbox = true
-        warn("[DHC] BloodBypass: flag mantida, mas sem implementacao (logica original oculta).")
-    end
-    local size = Vector3.new(
-        math.clamp(tonumber(cfg.X) or 14, 1, 50),
-        math.clamp(tonumber(cfg.Y) or 14, 1, 50),
-        math.clamp(tonumber(cfg.Z) or 14, 1, 50)
-    )
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            local part = rootOf(charOf(player))
-            if part and part:IsA("BasePart") then
-                if not hitboxOriginal[part] then
-                    hitboxOriginal[part] = {
-                        Size = part.Size, Color = part.Color,
-                        Transparency = part.Transparency, CanCollide = part.CanCollide,
-                    }
-                end
-                pcall(function()
-                    part.Size = size
-                    part.CanCollide = false
-                    part.Color = cfg.Color
-                    part.Transparency = cfg.Visible and math.clamp(cfg.Transparency, 0, 1) or 1
-                end)
-            end
-        end
-    end
-end
-
--- =============================================================
--- SPREAD V8: REAPLICACAO DINAMICA DOS MULTIPLICADORES CONFIGURADOS
--- =============================================================
--- Mantem os valores originais por funcao. Assim, alterar Config.SpreadModification.Guns
--- durante a execucao reaplica o multiplicador sem depender dos valores ja modificados.
--- A deteccao continua limitada as assinaturas confirmadas no bytecode analisado.
-local function isNear(x, target)
-    return type(x) == "number" and math.abs(x - target) < 1e-6
-end
-
-local function readConsts(fn, getter)
-    local ok, vals = pcall(getter, fn)
-    if ok and type(vals) == "table" then return vals end
-    return nil
-end
-
-local function getConstApi()
-    local getter = debug and debug.getconstants or getconstants
-    local setter = debug and debug.setconstant or setconstant
-    if type(getgc) ~= "function" or type(getter) ~= "function" or type(setter) ~= "function" then
-        return nil, nil, "Executor sem getgc/debug.getconstants/debug.setconstant"
-    end
-    return getter, setter, nil
-end
-
-local function functionSource(fn)
-    local infoApi = debug and debug.getinfo
-    if type(infoApi) ~= "function" then return "" end
-    local ok, info = pcall(infoApi, fn)
-    if not ok or type(info) ~= "table" then return "" end
-    return tostring(info.source or info.short_src or "")
-end
-
-local function gunFromConsts(vals, fn)
-    -- Primeiro tenta identificar a origem da funcao pelo script-fonte.
-    -- Isso evita classificar a Double-Barrel como Tactical apenas por constantes compartilhadas.
-    local source = functionSource(fn)
-    if source:find("DB_GunClient", 1, true)
-        or source:find("[Double-Barrel SG]", 1, true) then
-        return "[Double-Barrel SG]"
-    end
-    if source:find("Tactical_GunClient", 1, true)
-        or source:find("[TacticalShotgun]", 1, true) then
-        return "[TacticalShotgun]"
-    end
-
-    local has = {}
-    local p03, p06, p015 = false, false, false
-    for _, value in pairs(vals) do
-        if type(value) == "string" then has[value] = true end
-        if isNear(value, 0.03) then p03 = true end
-        if isNear(value, 0.06) then p06 = true end
-        if isNear(value, 0.015) then p015 = true end
-    end
-
-    -- O bytecode exportado de DB_GunClient nao contem a string CTS.
-    -- DB usa 0.03/0.06; Tactical tambem apresenta 0.015.
-    if not (has.random and has.Vector3 and has.LocalMousePos and has.HandleRayCasting
-            and has.Muzzle and has.Unit and has.Range and p03 and p06) then
-        return nil
-    end
-    return p015 and "[TacticalShotgun]" or "[Double-Barrel SG]"
-end
-
-local function restoreSpread()
-    local _, setter = getConstApi()
-    if not setter then return end
-    for fn, data in pairs(spreadOriginal) do
-        for idx, old in pairs(data.values) do
-            pcall(setter, fn, idx, old)
-        end
-    end
-    for fn in pairs(spreadOriginal) do
-        spreadOriginal[fn] = nil
-    end
-    spreadPatched["[Double-Barrel SG]"] = 0
-    spreadPatched["[TacticalShotgun]"] = 0
-end
-
-local function applySpreadEntry(fn, entry, mult, getter, setter)
-    local changed = 0
-    for idx, original in pairs(entry.values) do
-        local target = original * mult
-        local setOk, setErr = pcall(setter, fn, idx, target)
-        if setOk then
-            local check = readConsts(fn, getter)
-            if check and isNear(check[idx], target) then
-                changed = changed + 1
-            else
-                spreadLastError = "setconstant nao confirmou leitura de retorno"
-            end
-        else
-            spreadLastError = tostring(setErr or "setconstant falhou")
-        end
-    end
-    return changed
-end
-
-local function updateSpread()
-    local cfg = Config.SpreadModification
-    if not cfg.Enabled then
-        if next(spreadOriginal) then restoreSpread() end
-        return
-    end
-
-    local supportedSpreadPlaces = {
-        [97124701004636] = true,
-        [119280064370189] = true,
-    }
-    if not supportedSpreadPlaces[game.PlaceId] then
-        spreadLastError = "PlaceId nao corresponde a uma experiencia analisada"
-        if not warnedSpread then
-            warnedSpread = true
-            warn("[V4ware V19] Experiencia nao corresponde ao Pain Hood analisado; spread nao modificado.")
-        end
-        return
-    end
-
-    local getter, setter, apiError = getConstApi()
-    if apiError then
-        spreadLastError = apiError
-        if not warnedSpread then
-            warnedSpread = true
-            warn("[V4ware V19] Spread inativo: " .. apiError)
-        end
-        return
-    end
-
-    spreadAttempted = true
-    spreadLastError = nil
-    spreadPatched["[Double-Barrel SG]"] = 0
-    spreadPatched["[TacticalShotgun]"] = 0
-
-    local gcOk, objects = pcall(getgc, true)
-    if not gcOk or type(objects) ~= "table" then
-        gcOk, objects = pcall(getgc)
-    end
-    if not gcOk or type(objects) ~= "table" then
-        spreadLastError = "getgc nao retornou funcoes"
-        warn("[V4ware V19] Spread inativo: " .. spreadLastError)
-        return
-    end
-
-    local matches, changed = 0, 0
-    local seen = {}
-    for _, fn in pairs(objects) do
-        if type(fn) == "function" then
-            local entry = spreadOriginal[fn]
-            if entry then
-                -- Funcao ja identificada: reaplica usando os valores originais guardados,
-                -- mesmo que a constante atual ja seja 0 ou outro multiplicador.
-                seen[fn] = true
-                matches = matches + 1
-                local mult = tonumber(cfg.Guns[entry.gun])
-                if mult then
-                    local n = applySpreadEntry(fn, entry, mult, getter, setter)
-                    spreadPatched[entry.gun] = (spreadPatched[entry.gun] or 0) + n
-                    changed = changed + n
-                end
-            else
-                local vals = readConsts(fn, getter)
-                if vals then
-                    local gun = gunFromConsts(vals, fn)
-                    if gun then
-                        local entryNew = { gun = gun, values = {} }
-                        for idx, value in pairs(vals) do
-                            if type(idx) == "number" and
-                               (isNear(value, 0.03) or isNear(value, 0.06) or isNear(value, 0.015)) then
-                                entryNew.values[idx] = value
-                            end
-                        end
-                        if next(entryNew.values) then
-                            spreadOriginal[fn] = entryNew
-                            seen[fn] = true
-                            matches = matches + 1
-                            local mult = tonumber(cfg.Guns[gun])
-                            if mult then
-                                local n = applySpreadEntry(fn, entryNew, mult, getter, setter)
-                                spreadPatched[gun] = (spreadPatched[gun] or 0) + n
-                                changed = changed + n
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    spreadCandidatesSeen = matches
-    if matches == 0 then
-        spreadLastError = spreadLastError or "nenhuma funcao correspondeu a assinatura conhecida; bytecode pode ter mudado"
-    end
-
-    if not warnedSpread then
-        warnedSpread = true
-        if changed > 0 then
-            warn(("[V4ware V19] %d constantes ajustadas em %d funcao(oes) identificada(s). Resultado visual/servidor ainda precisa de validacao.")
-                :format(changed, matches))
-        else
-            warn("[V4ware V19] Nenhuma constante ativa foi alterada: " .. tostring(spreadLastError or "sem constantes confirmadas"))
-        end
-        warn(("[V4ware V19] Contagem por arma: DB=%d | Tactical=%d | Revolver=%d")
-            :format(spreadPatched["[Double-Barrel SG]"] or 0,
-                    spreadPatched["[TacticalShotgun]"] or 0,
-                    spreadPatched["[Revolver]"] or 0))
-        warn("[V4ware V19] Revolver permanece sem identificacao confirmada no bytecode analisado.")
-    end
-end
-
--- =============================================================
--- MOVIMENTO, ORDEM DE ARMAS, TELEPORTES
--- =============================================================
-local function sortInventory()
-    if not Config.InventorySorter.Enabled then return end
-    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-    if not backpack then return end
-    local list, rank = {}, {}
-    for order, name in ipairs(Config.InventorySorter.Order) do rank[name] = order end
-    for _, item in ipairs(backpack:GetChildren()) do
-        if item:IsA("Tool") then table.insert(list, item) end
-    end
-    table.sort(list, function(a, b)
-        local aRank, bRank = rank[a.Name] or 9999, rank[b.Name] or 9999
-        if aRank ~= bRank then return aRank < bRank end
-        return a.Name < b.Name
-    end)
-    -- Tentativa local de reordenar Backpack (a UI do jogo pode ignorar).
-    for _, item in ipairs(list) do item.Parent = nil end
-    for _, item in ipairs(list) do item.Parent = backpack end
-end
-
-local function autoSwitch()
-    if not Config.AutoSwitch.Enabled then return end
-    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-    local char = charOf(LocalPlayer)
-    local hum = humanoidOf(char)
-    if not backpack or not char or not hum then return end
-    local selected = nil
-    for _, name in ipairs(Config.InventorySorter.Order) do
-        local item = backpack:FindFirstChild(name)
-        if item and item:IsA("Tool") then selected = item break end
-    end
-    if not selected then selected = backpack:FindFirstChildOfClass("Tool") end
-    if selected then hum:EquipTool(selected) end
-end
-
--- =============================================================
--- V4WARE WEAPON SWITCH: UMA TECLA, TRES ARMAS EM SEQUENCIA
--- =============================================================
--- Usa exclusivamente Humanoid:EquipTool e Tool:Activate/Deactivate.
--- Nao modifica recarga, cadencia, eventos remotos ou validacoes do jogo.
--- A chamada Activate confirma uma tentativa, nao o registro do tiro no servidor.
-local function weaponSwitchConfig()
-    if type(Config.WeaponSwitch) ~= "table" then
-        Config.WeaponSwitch = {
-            Enabled = true, Key = "V",
-            Order = {"[Double-Barrel SG]", "[TacticalShotgun]", "[Revolver]"},
-            EquipDelay = 0.20, ShotHold = 0.06, BetweenDelay = 0.12,
-            Cooldown = 1.50, RestorePrevious = true, SkipEmpty = true,
-        }
-    end
-    return Config.WeaponSwitch
-end
-
-local function findWeapon(name, backpack, character)
-    local t = character and character:FindFirstChild(name)
-    if not (t and t:IsA("Tool")) then
-        t = backpack and backpack:FindFirstChild(name)
-    end
-    return t and t:IsA("Tool") and t or nil
-end
-
-local function weaponAmmoEmpty(tool)
-    -- Fica desativavel no Config: algumas armas usam contadores diferentes.
-    local ammo = tool:FindFirstChild("Ammo") or tool:FindFirstChild("ClientAmmo")
-    return ammo and ammo:IsA("ValueBase") and type(ammo.Value) == "number" and ammo.Value <= 0
-end
-
-local function requestWeaponSwitch()
-    local cfg = weaponSwitchConfig()
-    if not cfg.Enabled or weaponSwitchBusy or not running then return end
-    local now = os.clock()
-    local cooldown = math.clamp(tonumber(cfg.Cooldown) or 1.5, 0, 30)
-    if now - weaponSwitchLastStart < cooldown then return end
-    local character = charOf(LocalPlayer)
-    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
-    local hum = humanoidOf(character)
-    if not character or not backpack or not hum or hum.Health <= 0 then
-        weaponSwitchLastError = "Personagem/Backpack/Humanoid indisponivel"
-        return
-    end
-    if type(cfg.Order) ~= "table" then
-        weaponSwitchLastError = "WeaponSwitch.Order deve ser uma lista"
-        return
-    end
-
-    weaponSwitchBusy = true
-    weaponSwitchLastStart = now
-    weaponSwitchLastError = nil
-    weaponSwitchLastResult = "Em andamento"
-    weaponSwitchLastAttempts = 0
-    weaponSwitchLastSkipped = 0
-
-    local original = equippedTool()
-    task.spawn(function()
-        local ok, err = pcall(function()
-            local equipDelay = math.clamp(tonumber(cfg.EquipDelay) or 0.20, 0.05, 2)
-            local shotHold = math.clamp(tonumber(cfg.ShotHold) or 0.06, 0, 0.5)
-            local between = math.clamp(tonumber(cfg.BetweenDelay) or 0.12, 0, 2)
-            for _, name in ipairs(cfg.Order) do
-                if not running or charOf(LocalPlayer) ~= character or hum.Health <= 0 then
-                    weaponSwitchLastError = "Sequencia interrompida: personagem mudou"
-                    break
-                end
-                local tool = findWeapon(tostring(name), backpack, character)
-                if not tool then
-                    weaponSwitchLastSkipped = weaponSwitchLastSkipped + 1
-                    warn("[V4ware WS] Arma nao encontrada: " .. tostring(name))
-                elseif cfg.SkipEmpty and weaponAmmoEmpty(tool) then
-                    weaponSwitchLastSkipped = weaponSwitchLastSkipped + 1
-                    warn("[V4ware WS] Sem municao: " .. tostring(name))
-                else
-                    if tool.Parent ~= character then
-                        local equipOk = pcall(function() hum:EquipTool(tool) end)
-                        if not equipOk then
-                            weaponSwitchLastSkipped = weaponSwitchLastSkipped + 1
-                            warn("[V4ware WS] Falha ao equipar: " .. tostring(name))
-                        end
-                    end
-                    task.wait(equipDelay)
-                    if running and tool.Parent == character then
-                        local fireOk, fireErr = pcall(function() tool:Activate() end)
-                        if fireOk then
-                            weaponSwitchLastAttempts = weaponSwitchLastAttempts + 1
-                            print("[V4ware WS] Ativacao solicitada: " .. tostring(name))
-                        else
-                            weaponSwitchLastSkipped = weaponSwitchLastSkipped + 1
-                            weaponSwitchLastError = tostring(fireErr)
-                            warn("[V4ware WS] Erro em Activate: " .. tostring(fireErr))
-                        end
-                        if shotHold > 0 then task.wait(shotHold) end
-                        pcall(function() tool:Deactivate() end)
-                    else
-                        weaponSwitchLastSkipped = weaponSwitchLastSkipped + 1
-                        warn("[V4ware WS] A arma nao ficou equipada: " .. tostring(name))
-                    end
-                    if between > 0 then task.wait(between) end
-                end
-            end
-            if running and cfg.RestorePrevious and original and original.Parent and
-                charOf(LocalPlayer) == character and hum.Health > 0 then
-                pcall(function() hum:EquipTool(original) end)
-            end
-        end)
-        if not ok then weaponSwitchLastError = tostring(err) end
-        weaponSwitchLastResult = ("%d ativacao(oes) solicitada(s); %d ignorada(s)")
-            :format(weaponSwitchLastAttempts, weaponSwitchLastSkipped)
-        print("[V4ware WS] " .. weaponSwitchLastResult)
-        if weaponSwitchLastError then warn("[V4ware WS] " .. weaponSwitchLastError) end
-        weaponSwitchBusy = false
-    end)
-end
-
-local function tp(position)
-    local root = rootOf(charOf(LocalPlayer))
-    if root then root.CFrame = CFrame.new(position) end
-end
-
-local function rageAction(input)
-    if not Config.Rage.Enabled then return false end
-    local cfg = Config.Rage
-    for _, item in pairs(cfg.Teleports) do
-        if pressed(input, item.Key) then tp(item.Position) return true end
-    end
-    if pressed(input, cfg.SkyReset.Key) then
-        local root = rootOf(charOf(LocalPlayer))
-        if root then tp(root.Position + Vector3.new(0, cfg.SkyReset.SkyHeight, 0)) end
-        return true
-    end
-    if pressed(input, cfg.TeleportToTarget.Key) then
-        local target = camTarget or findCamTarget()
-        local root = target and rootOf(charOf(target))
-        if root then tp(root.Position + Vector3.new(2, 0, 0)) end
-        return true
-    end
-    return false
-end
-
--- =============================================================
--- PULO V14: RESTAURACAO PROATIVA + CONTATO ESTRITO DOS PES
--- =============================================================
--- Um comando de Espaco = no maximo UM pedido de salto.
--- Nada de velocidade adicional, gravidade, CFrame, impulso no ar ou voo.
--- Se apertar Espaco enquanto estiver no ar, esse pedido e DESCARTADO.
--- Nenhum salto e armazenado para executar automaticamente na aterrissagem.
--- Nao remove restricoes que sejam impostas pelo servidor.
-local jumpKeyLatched = false
-local groundJumpCount = 0
-local groundJumpConfirmed = 0
-local jumpStateWasDisabled = 0
-local restoredJumpPower = 0
-local proactivePowerRestores = 0
-local proactiveStateRestores = 0
-local lastRecoveryReason = "sem bloqueio observado"
-local nextNativeRecovery = 0
-local recoveryReentry = false
-local jumpInputCount = 0
-local jumpBufferedCount = 0
-local jumpBufferedExecuted = 0
-local jumpBufferedExpired = 0
-local nativeDeniedCount = 0
-local attemptedJumpAt = 0
-local attemptedJumpHum = nil
-local observedThisAttempt = false
-local checkedThisAttempt = true
-local baselineHumanoid = nil
-local baselinePower = nil
-local baselineHeight = nil
-local lastJumpResult = "Nenhuma tentativa"
-local pendingJumpUntil = 0
-local pendingJumpHum = nil
-local lastFloorMethod = "nao testado"
-local feetContactFrames = 0
-local feetStable = false
-local feetContactName = "nenhum"
-local jumpConsumedThisLanding = false
-local hasLeftGroundSinceJump = false
-local lastGroundRequestedAt = 0
-local airJumpIgnored = 0
-
-local function observeHumanoid(hum)
-    if not hum or hum == baselineHumanoid then return end
-    baselineHumanoid = hum
-    -- Registrar a altura NORMAL da propria sessao. Nunca aumentar acima do inicial.
-    local currentPower, currentHeight = hum.JumpPower, hum.JumpHeight
-    baselinePower = (currentPower and currentPower > 0) and currentPower or baselinePower
-    baselineHeight = (currentHeight and currentHeight > 0) and currentHeight or baselineHeight
-    attemptedJumpAt, attemptedJumpHum = 0, nil
-    checkedThisAttempt = true
-    observedThisAttempt = false
-    pendingJumpUntil, pendingJumpHum = 0, nil
-    feetContactFrames = 0
-    feetStable = false
-    feetContactName = "nenhum"
-    jumpConsumedThisLanding = false
-    hasLeftGroundSinceJump = false
-    lastGroundRequestedAt = 0
-    local conn = hum.StateChanged:Connect(function(_, newState)
-        if not running then return end
-        if newState == Enum.HumanoidStateType.Jumping then
-            if attemptedJumpHum == hum and not observedThisAttempt then
-                observedThisAttempt = true
-                groundJumpConfirmed = groundJumpConfirmed + 1
-                lastJumpResult = "Salto nativo observado"
-            end
-        end
-    end)
-    table.insert(connections, conn)
-    -- O cooldown pode reduzir JumpPower para ZERO depois de tres pulos.
-    -- Vigiar a propriedade evita depender de outra tecla ou do detector de chao.
-    local function onPowerChanged()
-        if not running or hum ~= baselineHumanoid or recoveryReentry then return end
-        if hum.UseJumpPower and baselinePower and baselinePower > 0 and hum.JumpPower <= 0 then
-            recoveryReentry = true
-            local ok = pcall(function() hum.JumpPower = baselinePower end)
-            recoveryReentry = false
-            if ok then
-                restoredJumpPower = restoredJumpPower + 1
-                proactivePowerRestores = proactivePowerRestores + 1
-                lastRecoveryReason = "JumpPower zerado: restaurado ao valor inicial"
-            end
-        end
-    end
-    local function onHeightChanged()
-        if not running or hum ~= baselineHumanoid or recoveryReentry then return end
-        if not hum.UseJumpPower and baselineHeight and baselineHeight > 0 and hum.JumpHeight <= 0 then
-            recoveryReentry = true
-            local ok = pcall(function() hum.JumpHeight = baselineHeight end)
-            recoveryReentry = false
-            if ok then
-                restoredJumpPower = restoredJumpPower + 1
-                proactivePowerRestores = proactivePowerRestores + 1
-                lastRecoveryReason = "JumpHeight zerado: restaurado ao valor inicial"
-            end
-        end
-    end
-    table.insert(connections, hum:GetPropertyChangedSignal("JumpPower"):Connect(onPowerChanged))
-    table.insert(connections, hum:GetPropertyChangedSignal("JumpHeight"):Connect(onHeightChanged))
-    -- Nao impomos nem gravidade nem velocidades; somente recuperamos o salto do Humanoid.
-    onPowerChanged()
-    onHeightChanged()
-end
-
--- A detecao antiga aceitava FloorMaterial (que pode ficar desatualizado)
--- ou um raycast do quadril proximo do solo. Essa verificacao usa as SOLAS.
-local function isGrounded(hum)
-    lastFloorMethod = "ar / sem apoio dos pes"
-    feetContactName = "nenhum"
-    if not hum or hum.Health <= 0 or hum.Sit then return false end
-    local state = hum:GetState()
-    -- Em Jumping, Freefall e outros estados aereos NUNCA tentamos reiniciar salto.
-    if state ~= Enum.HumanoidStateType.Running
-        and state ~= Enum.HumanoidStateType.RunningNoPhysics
-        and state ~= Enum.HumanoidStateType.Landed then
-        lastFloorMethod = "estado nao apoiado: " .. tostring(state)
-        return false
-    end
-    local character = hum.Parent
-    local root = rootOf(character)
-    if not root then return false end
-    -- Durante subida ou queda significativa nao ha aterrissagem confirmada.
-    local vy = root.AssemblyLinearVelocity.Y
-    if vy > 1.25 or vy < -3 then
-        lastFloorMethod = "movimento vertical sem pouso: " .. string.format("%.2f", vy)
-        return false
-    end
-
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {character}
-    params.IgnoreWater = true
-    pcall(function() params.RespectCanCollide = true end)
-    local feet
-    if hum.RigType == Enum.HumanoidRigType.R15 then
-        feet = {"LeftFoot", "RightFoot"}
-    else
-        feet = {"Left Leg", "Right Leg"}
-    end
-    local gapLimit = math.clamp(tonumber(Config.Movement.GroundRayTolerance) or 0.10, 0.03, 0.12)
-    for _, partName in ipairs(feet) do
-        local foot = character:FindFirstChild(partName)
-        if foot and foot:IsA("BasePart") then
-            -- Altura mais baixa da caixa orientada: considera rotacao da perna/pe.
-            local cf, size = foot.CFrame, foot.Size
-            local halfVertical = (math.abs(cf.RightVector.Y)*size.X
-                + math.abs(cf.UpVector.Y)*size.Y
-                + math.abs(cf.LookVector.Y)*size.Z) * 0.5
-            local soleY = foot.Position.Y - halfVertical
-            local rayStart = foot.Position + Vector3.new(0, 0.15, 0)
-            local distance = (rayStart.Y - soleY) + gapLimit
-            local hit = Workspace:Raycast(rayStart, Vector3.new(0, -distance, 0), params)
-            if hit and hit.Instance and hit.Instance:IsA("BasePart") and hit.Instance.CanCollide then
-                local gap = soleY - hit.Position.Y
-                -- O pe precisa de fato tocar o piso: nao basta estar perto dele.
-                if gap >= -0.08 and gap <= gapLimit then
-                    feetContactName = partName
-                    lastFloorMethod = "sola apoiada: " .. partName .. " (gap=" .. string.format("%.3f", gap) .. ")"
-                    return true
-                end
-            end
-        end
-    end
-    return false
-end
-
--- Acompanha o pouso antes de autorizar UM novo salto.
--- So rearma quando o personagem realmente saiu do chao e voltou a tocar.
-local function updateFootContact()
-    local hum = humanoidOf(charOf(LocalPlayer))
-    if not hum then
-        feetContactFrames, feetStable = 0, false
-        return
-    end
-    observeHumanoid(hum)
-    local contact = isGrounded(hum)
-    if contact then
-        feetContactFrames = math.min(30, feetContactFrames + 1)
-        local required = math.clamp(math.floor(tonumber(Config.Movement.GroundStableFrames) or 2), 2, 5)
-        feetStable = feetContactFrames >= required
-        if jumpConsumedThisLanding and hasLeftGroundSinceJump and feetStable then
-            jumpConsumedThisLanding = false
-            hasLeftGroundSinceJump = false
-        elseif jumpConsumedThisLanding and not hasLeftGroundSinceJump
-            and feetStable and os.clock() - lastGroundRequestedAt >= 0.35 then
-            -- Pedido rejeitado pelo jogo: permite nova tentativa no chao.
-            jumpConsumedThisLanding = false
-        end
-    else
-        feetContactFrames, feetStable = 0, false
-        if jumpConsumedThisLanding then hasLeftGroundSinceJump = true end
-    end
-end
-
-local function maintainNativeJump()
-    if not running or not Config.Movement["No Jump Cooldown"] then return end
-    local now = os.clock()
-    if now < nextNativeRecovery then return end
-    nextNativeRecovery = now + 0.06
-    local hum = humanoidOf(charOf(LocalPlayer))
-    if not hum or hum.Health <= 0 then return end
-    observeHumanoid(hum)
-    -- O valor normal do pulo pode ser bloqueado tanto por propriedade quanto por estado.
-    -- Recuperar somente valores zerados, sem aumento da altura e sem impulso no ar.
-    if hum.UseJumpPower and baselinePower and baselinePower > 0 and hum.JumpPower <= 0 then
-        if pcall(function() hum.JumpPower = baselinePower end) then
-            restoredJumpPower = restoredJumpPower + 1
-            proactivePowerRestores = proactivePowerRestores + 1
-            lastRecoveryReason = "JumpPower restaurado (verificacao periodica)"
-        end
-    elseif (not hum.UseJumpPower) and baselineHeight and baselineHeight > 0 and hum.JumpHeight <= 0 then
-        if pcall(function() hum.JumpHeight = baselineHeight end) then
-            restoredJumpPower = restoredJumpPower + 1
-            proactivePowerRestores = proactivePowerRestores + 1
-            lastRecoveryReason = "JumpHeight restaurado (verificacao periodica)"
-        end
-    end
-    -- Somente reabilitar Jumping no chao; nunca iniciar um novo salto automaticamente.
-    if isGrounded(hum) then
-        local ok, enabled = pcall(function()
-            return hum:GetStateEnabled(Enum.HumanoidStateType.Jumping)
-        end)
-        if ok and enabled == false then
-            local restored = pcall(function()
-                hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
-            end)
-            if restored then
-                jumpStateWasDisabled = jumpStateWasDisabled + 1
-                proactiveStateRestores = proactiveStateRestores + 1
-                lastRecoveryReason = "Estado Jumping bloqueado: reabilitado no chao"
-            end
-        end
-    end
-end
-
-local function nativeJump(hum)
-    if not running or not hum or jumpConsumedThisLanding or not feetStable or not isGrounded(hum) then
-        return false
-    end
-    local okEnabled, stateEnabled = pcall(function()
-        return hum:GetStateEnabled(Enum.HumanoidStateType.Jumping)
-    end)
-    if okEnabled and stateEnabled == false then
-        local restored = pcall(function()
-            hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
-        end)
-        if restored then jumpStateWasDisabled = jumpStateWasDisabled + 1 end
-    end
-    if hum.UseJumpPower and baselinePower and baselinePower > 0 and hum.JumpPower <= 0 then
-        local restored = pcall(function() hum.JumpPower = baselinePower end)
-        if restored then restoredJumpPower = restoredJumpPower + 1 end
-    elseif not hum.UseJumpPower and baselineHeight and baselineHeight > 0 and hum.JumpHeight <= 0 then
-        local restored = pcall(function() hum.JumpHeight = baselineHeight end)
-        if restored then restoredJumpPower = restoredJumpPower + 1 end
-    end
-    pendingJumpUntil, pendingJumpHum = 0, nil
-    jumpConsumedThisLanding = true
-    hasLeftGroundSinceJump = false
-    lastGroundRequestedAt = os.clock()
-    feetStable = false
-    feetContactFrames = 0
-    groundJumpCount = groundJumpCount + 1
-    attemptedJumpHum = hum
-    attemptedJumpAt = os.clock()
-    observedThisAttempt = false
-    checkedThisAttempt = false
-    lastJumpResult = "Pedido de salto nativo enviado no chao"
-    -- Nenhuma forca propria: a altura permanece a definida pelo Humanoid.
-    hum.Jump = true
-    local ok = pcall(function()
-        hum:ChangeState(Enum.HumanoidStateType.Jumping)
-    end)
-    if not ok then lastJumpResult = "ChangeState nao aceito pelo cliente" end
-    return true
-end
-
-local function onJumpRequest()
-    if not running or not Config.Movement["No Jump Cooldown"] then return end
-    local hum = humanoidOf(charOf(LocalPlayer))
-    if not hum then return end
-    observeHumanoid(hum)
-    jumpInputCount = jumpInputCount + 1
-    if feetStable and not jumpConsumedThisLanding and isGrounded(hum) then
-        if not nativeJump(hum) then
-            lastJumpResult = "Pedido nao aceito: sem apoio confirmado"
-        end
-    else
-        -- IMPORTANTISSIMO: nada de buffer; pedido no ar nao gera salto futuro.
-        airJumpIgnored = airJumpIgnored + 1
-        lastJumpResult = "Ignorado: pes sem apoio estavel no chao"
-    end
-end
-
-local function processJumpBuffer()
-    -- V14: intencionalmente vazio. Nao agenda nenhum salto automatico.
-    if not checkedThisAttempt and attemptedJumpAt > 0
-        and os.clock() - attemptedJumpAt > 0.22 then
-        checkedThisAttempt = true
-        if not observedThisAttempt then
-            nativeDeniedCount = nativeDeniedCount + 1
-            lastJumpResult = "Salto nao confirmado pelo estado Jumping"
-        end
-    end
-end
-
--- Deduplicacao: InputBegan e JumpRequest podem chegar no mesmo pressionamento.
-local function keyboardJump(input, processed)
-    if processed or input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-    local cfg = Config.Movement.InfiniteJump
-    if not cfg or not pressed(input, cfg.Key or "Space") or jumpKeyLatched then return end
-    jumpKeyLatched = true
-    onJumpRequest()
-end
-
-local function jumpRequest()
-    local cfg = Config.Movement.InfiniteJump
-    if cfg and UserInputService.KeyboardEnabled then
-        local key = Enum.KeyCode[tostring(cfg.Key or "Space")]
-        if key and UserInputService:IsKeyDown(key) then
-            if jumpKeyLatched then return end
-            jumpKeyLatched = true
-        end
-    end
-    onJumpRequest()
-end
-
-connectSignal(LocalPlayer.CharacterAdded, function(ch)
-    jumpKeyLatched = false
-    local hum = ch:WaitForChild("Humanoid", 10)
-    if running and hum then observeHumanoid(hum) end
-end)
-observeHumanoid(humanoidOf(charOf(LocalPlayer)))
-
-local function updateAutoReset()
-    if not Config.AutoReset.Enabled or os.clock() < nextReset then return end
-    nextReset = os.clock() + 2
-    local character = charOf(LocalPlayer)
-    if knocked(character) then
-        local hum = humanoidOf(character)
-        if hum then pcall(function() hum.Health = 0 end) end
-    end
-end
-
--- =============================================================
--- INPUT, LOOP, CONTROLE E STATUS
--- =============================================================
-connectSignal(UserInputService.InputBegan, function(input, processed)
-    if input.UserInputType == Enum.UserInputType.MouseButton2 then
-        rightMouseHeld = true
-        return
-    end
-    if processed then return end
-    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-    keyboardJump(input, processed)
-    if Config.Triggerbot.Enabled and pressed(input, Config.Triggerbot.Key) then
-        if Config.Triggerbot.Type == "Toggle" then
-            triggerActive = not triggerActive
-        else
-            triggerActive = true
-        end
-    end
-    if rageAction(input) then return end
-    if pressed(input, Config.ESP.Key) then
-        espActive = not espActive
-        refreshESP()
-    end
-    if pressed(input, Config.Camlock.Key) then
-        camActive = not camActive
-        camTarget = camActive and findCamTarget() or nil
-    end
-    local wsCfg = weaponSwitchConfig()
-    if wsCfg.Enabled and pressed(input, wsCfg.Key or "V") then
-        requestWeaponSwitch()
-        return
-    end
-    if pressed(input, Config.InventorySorter.Key) then sortInventory() end
-    if pressed(input, Config.AutoSwitch.Key) then autoSwitch() end
-end)
-
-connectSignal(UserInputService.InputEnded, function(input)
-    if input.UserInputType == Enum.UserInputType.Keyboard then
-        local cfg = Config.Movement.InfiniteJump
-        if cfg and pressed(input, cfg.Key or "Space") then jumpKeyLatched = false end
-    end
-    if input.UserInputType == Enum.UserInputType.MouseButton2 then rightMouseHeld = false end
-    if pressed(input, Config.Triggerbot.Key) and Config.Triggerbot.Type ~= "Toggle" then
-        triggerActive = false
-    end
-end)
-
-connectSignal(UserInputService.JumpRequest, jumpRequest)
-connectSignal(Players.PlayerRemoving, clearESP)
-
-connectSignal(RunService.RenderStepped, function(dt)
-    if not running then return end
-    updateCam(dt)
-    updateTrigger()
-end)
-
-connectSignal(RunService.Heartbeat, function()
-    if not running then return end
-    local now = os.clock()
-    if now >= nextESP then
-        nextESP = now + 0.4
-        refreshESP()
-    end
-    if now >= nextHitbox then
-        nextHitbox = now + math.max(0.05, tonumber(Config.HitboxExpander.RefreshTime) or 1)
-        updateHitboxes()
-    end
-    if now >= nextSpread then
-        nextSpread = now + math.max(3, tonumber(Config.SpreadModification.RefreshTime) or 6)
-        updateSpread()
-    end
-    updateFootContact()
-    maintainNativeJump()
-    processJumpBuffer()
-    updateAutoReset()
-end)
-
-local function status()
-    local localMatches = {}
-    for name, count in pairs(spreadMatches) do localMatches[name] = count end
-    return {
-        Version = 18,
-        Running = running,
-        InfiniteJump = false,
-        NoJumpCooldown = Config.Movement["No Jump Cooldown"],
-        GroundJumpsRequested = groundJumpCount,
-        GroundJumpsStateConfirmed = groundJumpConfirmed,
-        JumpStateReenabled = jumpStateWasDisabled,
-        JumpPowerBaselineRestored = restoredJumpPower,
-        JumpProactivePowerRestores = proactivePowerRestores,
-        JumpProactiveStateRestores = proactiveStateRestores,
-        JumpRecoveryReason = lastRecoveryReason,
-        JumpBaselinePower = baselinePower,
-        JumpBaselineHeight = baselineHeight,
-        JumpStateEnabled = (function()
-            local hum = humanoidOf(charOf(LocalPlayer))
-            if not hum then return nil end
-            local ok, enabled = pcall(function() return hum:GetStateEnabled(Enum.HumanoidStateType.Jumping) end)
-            return ok and enabled or nil
-        end)(),
-        JumpLastResult = lastJumpResult,
-        JumpInputPresses = jumpInputCount,
-        JumpBuffered = jumpBufferedCount,
-        JumpBufferedExecuted = jumpBufferedExecuted,
-        JumpBufferedExpired = jumpBufferedExpired,
-        JumpPending = pendingJumpUntil > os.clock(),
-        JumpGroundDetection = lastFloorMethod,
-        JumpFootContact = feetContactName,
-        JumpGroundFrames = feetContactFrames,
-        JumpGroundStable = feetStable,
-        JumpConsumedThisLanding = jumpConsumedThisLanding,
-        JumpAirRequestsIgnored = airJumpIgnored,
-        JumpNativeNotConfirmed = nativeDeniedCount,
-        JumpCurrentPower = (function()
-            local hum = humanoidOf(charOf(LocalPlayer))
-            return hum and hum.JumpPower or nil
-        end)(),
-        JumpCurrentFloor = (function()
-            local hum = humanoidOf(charOf(LocalPlayer))
-            return hum and tostring(hum.FloorMaterial) or "sem humanoide"
-        end)(),
-        JumpCurrentState = (function()
-            local hum = humanoidOf(charOf(LocalPlayer))
-            return hum and tostring(hum:GetState()) or "sem humanoide"
-        end)(),
-        TriggerFireDelay = Config.Triggerbot.FireDelay,
-        TriggerRange = Config.Triggerbot["Range-Check"].Data,
-        TriggerMaxRange = Config.Triggerbot["Range-Check"].HardCap,
-        Triggerbot = Config.Triggerbot.Enabled and triggerActive,
-        ESP = Config.ESP.Enabled and espActive,
-        Camlock = Config.Camlock.Enabled and camActive,
-        CamTarget = camTarget and camTarget.Name or nil,
-        WhitelistCount = (function() local n=0; for _ in pairs(Config.Triggerbot.Whitelist.List) do n=n+1 end; return n end)(),
-        Spectating = spectateTarget and spectateTarget.Name or nil,
-        HitboxExpander = Config.HitboxExpander.Enabled,
-        SpreadConfigured = Config.SpreadModification.Guns,
-        SpreadRuntimeConstantsPatched = localMatches,
-        SpreadScanAttempted = spreadAttempted,
-        SpreadCandidatesSeen = spreadCandidatesSeen,
-        SpreadLastError = spreadLastError,
-        WeaponSwitchEnabled = weaponSwitchConfig().Enabled,
-        WeaponSwitchKey = weaponSwitchConfig().Key,
-        WeaponSwitchBusy = weaponSwitchBusy,
-        WeaponSwitchLastAttempts = weaponSwitchLastAttempts,
-        WeaponSwitchLastSkipped = weaponSwitchLastSkipped,
-        WeaponSwitchLastResult = weaponSwitchLastResult,
-        WeaponSwitchLastError = weaponSwitchLastError,
-        SpreadRealVerified = false, -- validacao de dano/trajetoria do servidor nao foi testada
-        RemoteHooks = false,
-    }
-end
-
-
--- =============================================================
--- PAINEL INSERT: WHITELIST, INCOGNITO E CAMERA (SPECTATE)
--- Nao altera o patch de spread da V7 nem usa eventos remotos.
--- =============================================================
-local menuGui, menuPanel, menuPlayers, menuCount, tabWhitelist, tabIncognito, tabSystem, monitorFrame
-local selectedTab = "whitelist"
-local menuVisible = false
-local renderMenu
-local updateSystemMonitor
-local monitorValues = {}
-local currentFPS = 0
-local fpsFrameCount, fpsElapsed = 0, 0
-local monitorRefreshElapsed = 0
-
-local function restoreOwnCamera()
-    local cam = camera()
-    if not cam then return end
-    local char = charOf(LocalPlayer)
-    local hum = humanoidOf(char)
-    local previous = spectateOldSubject
-    if hum then
-        cam.CameraType = spectateOldType or Enum.CameraType.Custom
-        cam.CameraSubject = (previous and previous.Parent and previous) or hum
-    else
-        cam.CameraType = Enum.CameraType.Custom
-    end
-end
-
-local function stopSpectating()
-    if not spectateTarget then return end
-    spectateTarget = nil
-    restoreOwnCamera()
-    spectateOldSubject, spectateOldType = nil, nil
-end
-
-local function startSpectating(player)
-    if spectateTarget == player then
-        stopSpectating()
-        return
-    end
-    local targetHum = humanoidOf(charOf(player))
-    if not targetHum then
-        warn("[V4ware] Jogador sem personagem disponivel para visualizar.")
-        return
-    end
-    if not spectateTarget then
-        local cam = camera()
-        spectateOldSubject = cam and cam.CameraSubject or nil
-        spectateOldType = cam and cam.CameraType or nil
-    end
-    spectateTarget = player
-    local cam = camera()
-    if cam then
-        cam.CameraType = Enum.CameraType.Custom
-        cam.CameraSubject = targetHum
-    end
-end
-
-local function uiNew(className, props, parent)
-    local obj = Instance.new(className)
-    for key, value in pairs(props) do obj[key] = value end
-    obj.Parent = parent
-    return obj
-end
-
-local function uiText(parent, txt, props)
-    local p = {
-        Text = txt, BackgroundTransparency = 1, Font = Enum.Font.Gotham,
-        TextSize = 12, TextColor3 = Color3.fromRGB(217, 217, 217),
+local function label(parent, text, size, position, fontSize, color, font)
+    return create("TextLabel", parent, {
+        BackgroundTransparency = 1,
+        Text = text,
+        Size = size,
+        Position = position,
+        Font = font or Enum.Font.Gotham,
+        TextSize = fontSize or 13,
+        TextColor3 = color or Theme.text,
         TextXAlignment = Enum.TextXAlignment.Left,
-        BorderSizePixel = 0,
-    }
-    for k,v in pairs(props or {}) do p[k] = v end
-    return uiNew("TextLabel", p, parent)
+        TextYAlignment = Enum.TextYAlignment.Center,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+    })
 end
 
-local function buildMenu()
-    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 10)
-    if not playerGui then
-        warn("[V4ware] PlayerGui nao encontrado; menu nao criado")
+local function button(parent, text, size, position)
+    local item = create("TextButton", parent, {
+        AutoButtonColor = false,
+        BackgroundColor3 = Theme.surface,
+        BorderSizePixel = 0,
+        Text = text,
+        Size = size,
+        Position = position,
+        Font = Enum.Font.GothamMedium,
+        TextSize = 12,
+        TextColor3 = Theme.text,
+    })
+    corner(item, 8)
+    stroke(item)
+    return item
+end
+
+local screenGui = create("ScreenGui", playerGui, {
+    Name = OLD_GUI_NAME,
+    ResetOnSpawn = false,
+    IgnoreGuiInset = true,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    DisplayOrder = 40,
+})
+
+local main = create("Frame", screenGui, {
+    Name = "Main",
+    AnchorPoint = Vector2.new(0.5, 0.5),
+    Position = UDim2.fromScale(0.5, 0.5),
+    Size = UDim2.fromOffset(700, 480),
+    BackgroundColor3 = Theme.background,
+    BorderSizePixel = 0,
+})
+corner(main, 14)
+stroke(main, Theme.stroke)
+
+local sizeConstraint = create("UISizeConstraint", main, {
+    MinSize = Vector2.new(540, 68),
+    MaxSize = Vector2.new(820, 580),
+})
+
+local header = create("Frame", main, {
+    Name = "Header",
+    Size = UDim2.new(1, 0, 0, 68),
+    BackgroundColor3 = Theme.panel,
+    BorderSizePixel = 0,
+})
+corner(header, 14)
+
+-- Square off the lower corners of the header so it joins the body cleanly.
+create("Frame", header, {
+    Position = UDim2.new(0, 0, 1, -14),
+    Size = UDim2.new(1, 0, 0, 14),
+    BackgroundColor3 = Theme.panel,
+    BorderSizePixel = 0,
+})
+
+local logoMark = create("Frame", header, {
+    Position = UDim2.fromOffset(18, 17),
+    Size = UDim2.fromOffset(34, 34),
+    BackgroundColor3 = Theme.surfaceHover,
+    BorderSizePixel = 0,
+})
+corner(logoMark, 9)
+stroke(logoMark)
+label(logoMark, "V4", UDim2.fromScale(1, 1), UDim2.fromOffset(0, 0), 13, Theme.text, Enum.Font.GothamBold).TextXAlignment = Enum.TextXAlignment.Center
+
+label(header, "V4ware", UDim2.fromOffset(180, 24), UDim2.fromOffset(62, 15), 19, Theme.text, Enum.Font.GothamMedium)
+label(header, "CLEAN CONTROL CENTER", UDim2.fromOffset(220, 15), UDim2.fromOffset(63, 39), 9, Theme.muted, Enum.Font.Gotham)
+
+local onlineDot = create("Frame", header, {
+    Position = UDim2.new(1, -128, 0, 27),
+    Size = UDim2.fromOffset(7, 7),
+    BackgroundColor3 = Theme.green,
+    BorderSizePixel = 0,
+})
+corner(onlineDot, 8)
+label(header, "READY", UDim2.fromOffset(48, 18), UDim2.new(1, -115, 0, 21), 10, Theme.muted, Enum.Font.GothamMedium)
+
+local minimizeButton = button(header, "—", UDim2.fromOffset(28, 28), UDim2.new(1, -74, 0, 20))
+
+minimizeButton.TextSize = 15
+local closeButton = button(header, "×", UDim2.fromOffset(28, 28), UDim2.new(1, -40, 0, 20))
+closeButton.TextSize = 17
+
+local body = create("Frame", main, {
+    Name = "Body",
+    Position = UDim2.fromOffset(0, 68),
+    Size = UDim2.new(1, 0, 1, -68),
+    BackgroundTransparency = 1,
+})
+
+local sidebar = create("Frame", body, {
+    Name = "Sidebar",
+    Size = UDim2.new(0, 158, 1, 0),
+    BackgroundColor3 = Theme.panel,
+    BorderSizePixel = 0,
+})
+create("Frame", sidebar, {
+    Position = UDim2.new(1, -1, 0, 0),
+    Size = UDim2.new(0, 1, 1, 0),
+    BackgroundColor3 = Theme.stroke,
+    BorderSizePixel = 0,
+})
+
+label(sidebar, "WORKSPACE", UDim2.new(1, -28, 0, 18), UDim2.fromOffset(16, 18), 9, Theme.muted, Enum.Font.GothamMedium)
+
+local navHolder = create("Frame", sidebar, {
+    Position = UDim2.fromOffset(10, 48),
+    Size = UDim2.new(1, -20, 0, 190),
+    BackgroundTransparency = 1,
+})
+create("UIListLayout", navHolder, {
+    Padding = UDim.new(0, 6),
+    SortOrder = Enum.SortOrder.LayoutOrder,
+})
+
+local sidebarFooter = label(sidebar, "V20  •  LIGHTWEIGHT", UDim2.new(1, -24, 0, 16), UDim2.new(0, 14, 1, -28), 9, Theme.muted, Enum.Font.Gotham)
+
+local content = create("Frame", body, {
+    Name = "Content",
+    Position = UDim2.fromOffset(158, 0),
+    Size = UDim2.new(1, -158, 1, 0),
+    BackgroundTransparency = 1,
+})
+
+local pages = {}
+local navButtons = {}
+local activePage = "Overview"
+
+local function makePage(name)
+    local page = create("Frame", content, {
+        Name = name,
+        Position = UDim2.fromOffset(0, 0),
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        Visible = false,
+    })
+    pages[name] = page
+    return page
+end
+
+local overviewPage = makePage("Overview")
+local systemPage = makePage("System")
+local settingsPage = makePage("Settings")
+local consolePage = makePage("Console")
+
+local function pageHeading(parent, titleText, description)
+    label(parent, titleText, UDim2.new(1, -40, 0, 28), UDim2.fromOffset(22, 18), 19, Theme.text, Enum.Font.GothamMedium)
+    label(parent, description, UDim2.new(1, -40, 0, 18), UDim2.fromOffset(23, 47), 11, Theme.muted, Enum.Font.Gotham)
+end
+
+local function makeNav(name, subtitle)
+    local nav = create("TextButton", navHolder, {
+        Name = name .. "Button",
+        Size = UDim2.new(1, 0, 0, 38),
+        BackgroundColor3 = Theme.panel,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        AutoButtonColor = false,
+        Text = "",
+        LayoutOrder = #navHolder:GetChildren(),
+    })
+    corner(nav, 8)
+    local indicator = create("Frame", nav, {
+        Position = UDim2.fromOffset(0, 8),
+        Size = UDim2.fromOffset(3, 22),
+        BackgroundColor3 = Theme.accent,
+        BorderSizePixel = 0,
+        Visible = false,
+    })
+    corner(indicator, 3)
+    label(nav, name, UDim2.new(1, -18, 0, 18), UDim2.fromOffset(13, 3), 12, Theme.muted, Enum.Font.GothamMedium)
+    label(nav, subtitle, UDim2.new(1, -18, 0, 13), UDim2.fromOffset(13, 20), 9, Theme.muted, Enum.Font.Gotham)
+    navButtons[name] = {button = nav, indicator = indicator}
+    return nav
+end
+
+local function makeStatCard(parent, titleText, initialValue, x, y, width)
+    local card = create("Frame", parent, {
+        Position = UDim2.fromOffset(x, y),
+        Size = UDim2.fromOffset(width, 84),
+        BackgroundColor3 = Theme.surface,
+        BorderSizePixel = 0,
+    })
+    corner(card, 10)
+    stroke(card)
+    label(card, titleText, UDim2.new(1, -24, 0, 14), UDim2.fromOffset(12, 11), 9, Theme.muted, Enum.Font.GothamMedium)
+    local value = label(card, initialValue, UDim2.new(1, -24, 0, 30), UDim2.fromOffset(12, 34), 21, Theme.text, Enum.Font.GothamMedium)
+    return value
+end
+
+-- Overview page
+pageHeading(overviewPage, "Overview", "A simple view of your current client session.")
+
+local overviewFps = makeStatCard(overviewPage, "FRAME RATE", "--", 22, 82, 210)
+local overviewPing = makeStatCard(overviewPage, "NETWORK PING", "-- ms", 244, 82, 210)
+local overviewMemory = makeStatCard(overviewPage, "CLIENT MEMORY", "-- MB", 22, 178, 210)
+local overviewPlayers = makeStatCard(overviewPage, "PLAYERS IN SESSION", "--", 244, 178, 210)
+
+local overviewStatus = create("Frame", overviewPage, {
+    Position = UDim2.fromOffset(22, 276),
+    Size = UDim2.new(1, -44, 0, 72),
+    BackgroundColor3 = Theme.surface,
+    BorderSizePixel = 0,
+})
+corner(overviewStatus, 10)
+stroke(overviewStatus)
+label(overviewStatus, "SESSION STATUS", UDim2.new(1, -24, 0, 14), UDim2.fromOffset(13, 10), 9, Theme.muted, Enum.Font.GothamMedium)
+local overviewStatusValue = label(overviewStatus, "CLIENT READY  •  MONITOR ENABLED", UDim2.new(1, -24, 0, 20), UDim2.fromOffset(13, 29), 11, Theme.text, Enum.Font.GothamMedium)
+local overviewSession = label(overviewStatus, "Session 00:00:00", UDim2.new(1, -24, 0, 13), UDim2.fromOffset(13, 51), 9, Theme.muted, Enum.Font.Gotham)
+
+-- System page
+pageHeading(systemPage, "System monitor", "Live client telemetry. Sampling pauses when this page is not visible.")
+
+local systemFps = makeStatCard(systemPage, "FRAME RATE", "--", 22, 82, 210)
+local systemPing = makeStatCard(systemPage, "NETWORK PING", "-- ms", 244, 82, 210)
+local systemMemory = makeStatCard(systemPage, "CLIENT MEMORY", "-- MB", 22, 178, 210)
+local systemPlayers = makeStatCard(systemPage, "PLAYERS IN SESSION", "--", 244, 178, 210)
+
+local systemNote = create("Frame", systemPage, {
+    Position = UDim2.fromOffset(22, 276),
+    Size = UDim2.new(1, -44, 0, 72),
+    BackgroundColor3 = Theme.surface,
+    BorderSizePixel = 0,
+})
+corner(systemNote, 10)
+stroke(systemNote)
+label(systemNote, "PERFORMANCE MODE", UDim2.new(1, -24, 0, 14), UDim2.fromOffset(13, 10), 9, Theme.muted, Enum.Font.GothamMedium)
+label(systemNote, "Low-frequency updates  •  No animated graphs  •  No background polling while hidden", UDim2.new(1, -24, 0, 32), UDim2.fromOffset(13, 29), 10, Theme.text, Enum.Font.Gotham)
+
+-- Settings page
+pageHeading(settingsPage, "Settings", "Small controls to personalize the control center.")
+
+local settingsList = create("Frame", settingsPage, {
+    Position = UDim2.fromOffset(22, 82),
+    Size = UDim2.new(1, -44, 0, 250),
+    BackgroundTransparency = 1,
+})
+create("UIListLayout", settingsList, {
+    Padding = UDim.new(0, 9),
+    SortOrder = Enum.SortOrder.LayoutOrder,
+})
+
+local waitingForKey = false
+local keyButton
+local monitorButton
+local compactButton
+local accentButton
+
+local function settingRow(titleText, description, buttonText)
+    local row = create("Frame", settingsList, {
+        LayoutOrder = #settingsList:GetChildren() + 1,
+        Size = UDim2.new(1, 0, 0, 54),
+        BackgroundColor3 = Theme.surface,
+        BorderSizePixel = 0,
+    })
+    corner(row, 9)
+    stroke(row)
+    label(row, titleText, UDim2.new(1, -150, 0, 18), UDim2.fromOffset(12, 7), 11, Theme.text, Enum.Font.GothamMedium)
+    label(row, description, UDim2.new(1, -150, 0, 14), UDim2.fromOffset(12, 28), 9, Theme.muted, Enum.Font.Gotham)
+    local control = button(row, buttonText, UDim2.fromOffset(112, 30), UDim2.new(1, -124, 0.5, -15))
+    return control
+end
+
+keyButton = settingRow("Panel shortcut", "Press a key to open or close the panel.", SETTINGS.openKey.Name)
+monitorButton = settingRow("System monitor", "Pause telemetry sampling when not needed.", "ON")
+compactButton = settingRow("Compact layout", "Use a smaller panel footprint.", "OFF")
+accentButton = settingRow("Accent color", "Switch between silver and ice blue.", SETTINGS.accentName)
+
+local settingsHint = label(settingsPage, "Tip: the monitor only samples while Overview or System is open.", UDim2.new(1, -44, 0, 30), UDim2.fromOffset(22, 350), 9, Theme.muted, Enum.Font.Gotham)
+
+-- Console page
+pageHeading(consolePage, "Live console", "A short local log for UI and diagnostic events.")
+
+local clearConsole = button(consolePage, "CLEAR LOG", UDim2.fromOffset(92, 28), UDim2.new(1, -114, 0, 22))
+clearConsole.TextSize = 9
+
+local consoleBox = create("ScrollingFrame", consolePage, {
+    Position = UDim2.fromOffset(22, 68),
+    Size = UDim2.new(1, -44, 1, -90),
+    BackgroundColor3 = Theme.surface,
+    BorderSizePixel = 0,
+    ScrollBarThickness = 3,
+    ScrollBarImageColor3 = Theme.muted,
+    CanvasSize = UDim2.new(0, 0, 0, 0),
+    AutomaticCanvasSize = Enum.AutomaticSize.Y,
+})
+corner(consoleBox, 9)
+stroke(consoleBox)
+create("UIPadding", consoleBox, {
+    PaddingTop = UDim.new(0, 9),
+    PaddingBottom = UDim.new(0, 9),
+    PaddingLeft = UDim.new(0, 10),
+    PaddingRight = UDim.new(0, 10),
+})
+local consoleLayout = create("UIListLayout", consoleBox, {
+    Padding = UDim.new(0, 5),
+    SortOrder = Enum.SortOrder.LayoutOrder,
+})
+
+local logCount = 0
+local MAX_LOGS = 50
+local logEntries = {}
+
+local function addLog(message, kind)
+    logCount += 1
+    local now = os.date("%H:%M:%S")
+    local color = Theme.muted
+    if kind == "success" then color = Theme.green end
+    if kind == "error" then color = Theme.red end
+
+    local entry = create("TextLabel", consoleBox, {
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -4, 0, 18),
+        Text = string.format("[%s]  %s", now, tostring(message)),
+        Font = Enum.Font.Code,
+        TextSize = 10,
+        TextColor3 = color,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Center,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        LayoutOrder = logCount,
+    })
+    table.insert(logEntries, entry)
+
+    while #logEntries > MAX_LOGS do
+        local first = table.remove(logEntries, 1)
+        if first then first:Destroy() end
+    end
+
+    task.defer(function()
+        if consoleBox.Parent then
+            consoleBox.CanvasPosition = Vector2.new(0, math.max(0, consoleLayout.AbsoluteContentSize.Y))
+        end
+    end)
+end
+
+clearConsole.MouseButton1Click:Connect(function()
+    for _, entry in ipairs(logEntries) do
+        if entry then entry:Destroy() end
+    end
+    table.clear(logEntries)
+    addLog("Console cleared.", "success")
+end)
+
+-- Navigation
+makeNav("Overview", "Session summary")
+makeNav("System", "Performance")
+makeNav("Settings", "Preferences")
+makeNav("Console", "Diagnostics")
+
+local function setPage(name)
+    activePage = name
+    for pageName, page in pairs(pages) do
+        page.Visible = pageName == name
+    end
+    for navName, nav in pairs(navButtons) do
+        local active = navName == name
+        nav.indicator.Visible = active
+        nav.button.BackgroundTransparency = active and 0 or 1
+        nav.button.BackgroundColor3 = active and Theme.surface or Theme.panel
+        local textLabel = nav.button:FindFirstChildOfClass("TextLabel")
+        if textLabel then
+            textLabel.TextColor3 = active and Theme.text or Theme.muted
+        end
+    end
+end
+
+for name, nav in pairs(navButtons) do
+    nav.button.MouseButton1Click:Connect(function()
+        setPage(name)
+    end)
+end
+
+-- Toast notification
+local toast = create("TextLabel", screenGui, {
+    AnchorPoint = Vector2.new(1, 1),
+    Position = UDim2.new(1, -22, 1, -22),
+    Size = UDim2.fromOffset(240, 34),
+    BackgroundColor3 = Theme.surfaceHover,
+    BorderSizePixel = 0,
+    Text = "",
+    TextColor3 = Theme.text,
+    TextSize = 11,
+    Font = Enum.Font.GothamMedium,
+    Visible = false,
+    ZIndex = 20,
+})
+corner(toast, 8)
+stroke(toast)
+
+local toastToken = 0
+local function notify(message)
+    toastToken += 1
+    local token = toastToken
+    toast.Text = tostring(message)
+    toast.Visible = true
+    task.delay(2.2, function()
+        if toast.Parent and toastToken == token then
+            toast.Visible = false
+        end
+    end)
+end
+
+-- Monitor sampling
+local sessionStart = os.clock()
+local frameCount = 0
+local fpsValue = 0
+local renderConnection = nil
+
+local function shouldSample()
+    return screenGui.Enabled
+        and main.Visible
+        and SETTINGS.monitorEnabled
+        and (activePage == "Overview" or activePage == "System")
+end
+
+local function refreshFrameSampler()
+    if shouldSample() and not renderConnection then
+        frameCount = 0
+        renderConnection = RunService.RenderStepped:Connect(function()
+            frameCount += 1
+        end)
+    elseif not shouldSample() and renderConnection then
+        renderConnection:Disconnect()
+        renderConnection = nil
+    end
+end
+
+local function readPing()
+    local success, result = pcall(function()
+        local item = Stats.Network.ServerStatsItem:FindFirstChild("Data Ping")
+        if not item then
+            return nil
+        end
+        return math.floor(item:GetValue())
+    end)
+    if success and result then
+        return tostring(result) .. " ms"
+    end
+    return "N/A"
+end
+
+local function readMemory()
+    local success, result = pcall(function()
+        return math.floor(Stats:GetTotalMemoryUsageMb())
+    end)
+    if success and result then
+        return tostring(result) .. " MB"
+    end
+    return "N/A"
+end
+
+local function formatDuration(seconds)
+    seconds = math.max(0, math.floor(seconds))
+    local hours = math.floor(seconds / 3600)
+    local minutes = math.floor((seconds % 3600) / 60)
+    local secs = seconds % 60
+    return string.format("%02d:%02d:%02d", hours, minutes, secs)
+end
+
+local function updateMonitor()
+    if not shouldSample() then
+        refreshFrameSampler()
         return
     end
-    local old = playerGui:FindFirstChild("V4ware_ControlPanel")
-    if old then old:Destroy() end
-    menuGui = uiNew("ScreenGui", {
-        Name = "V4ware_ControlPanel", ResetOnSpawn = false,
-        ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 100,
-        Enabled = false, IgnoreGuiInset = false,
-    }, playerGui)
-    menuPanel = uiNew("Frame", {
-        Name="Panel", Size=UDim2.fromOffset(500,426),
-        AnchorPoint=Vector2.new(0.5,0.5), Position=UDim2.fromScale(0.5,0.5),
-        BackgroundColor3=Color3.fromRGB(14,15,18), BorderSizePixel=0,
-        Active=true,
-    }, menuGui)
-    uiNew("UICorner", {CornerRadius=UDim.new(0,12)}, menuPanel)
-    uiNew("UIStroke", {Color=Color3.fromRGB(39,41,46), Thickness=1}, menuPanel)
-    uiText(menuPanel, "V4ware", {
-        Position=UDim2.fromOffset(20,10), Size=UDim2.fromOffset(100,23),
-        Font=Enum.Font.GothamSemibold, TextSize=16,
-        TextColor3=Color3.fromRGB(238,240,244),
-    })
-    uiText(menuPanel, "CONTROL CENTER", {
-        Position=UDim2.fromOffset(21,32), Size=UDim2.fromOffset(120,12),
-        Font=Enum.Font.GothamMedium, TextSize=8,
-        TextColor3=Color3.fromRGB(128,134,145),
-    })
-    local close = uiNew("TextButton", {
-        Name="Close", Size=UDim2.fromOffset(31,30), Position=UDim2.new(1,-44,0,7),
-        BackgroundTransparency=1, Text="×", Font=Enum.Font.Gotham,
-        TextColor3=Color3.fromRGB(150,155,164), TextSize=20,
-        AutoButtonColor=false,
-    }, menuPanel)
-    close.Activated:Connect(function()
-        menuVisible=false
-        if menuGui then menuGui.Enabled=false end
-    end)
 
-    tabWhitelist=uiNew("TextButton", {
-        Position=UDim2.fromOffset(25,57), Size=UDim2.fromOffset(84,23),
-        BackgroundTransparency=1, Font=Enum.Font.GothamMedium, Text="Whitelist",
-        TextColor3=Color3.fromRGB(143,149,159), TextSize=12,
-        AutoButtonColor=false,
-    },menuPanel)
-    tabIncognito=uiNew("TextButton", {
-        Position=UDim2.fromOffset(125,57), Size=UDim2.fromOffset(84,23),
-        BackgroundTransparency=1, Font=Enum.Font.GothamMedium, Text="Incognito",
-        TextColor3=Color3.fromRGB(143,149,159), TextSize=12,
-        AutoButtonColor=false,
-    },menuPanel)
-    tabSystem=uiNew("TextButton", {
-        Position=UDim2.fromOffset(225,57), Size=UDim2.fromOffset(90,23),
-        BackgroundTransparency=1, Font=Enum.Font.GothamMedium, Text="System",
-        TextColor3=Color3.fromRGB(143,149,159), TextSize=12,
-        AutoButtonColor=false,
-    },menuPanel)
-    local underline=uiNew("Frame", {
-        Name="ActiveTabLine", Position=UDim2.fromOffset(25,82),
-        Size=UDim2.fromOffset(84,2), BackgroundColor3=Color3.fromRGB(218,223,230),
-        BorderSizePixel=0,
-    },menuPanel)
-    uiNew("Frame", {
-        Position=UDim2.fromOffset(20,85),Size=UDim2.new(1,-40,0,1),
-        BackgroundColor3=Color3.fromRGB(35,37,42),BorderSizePixel=0,
-    },menuPanel)
-    menuPlayers=uiNew("ScrollingFrame", {
-        Name="PlayerList", Position=UDim2.fromOffset(20,91),
-        Size=UDim2.new(1,-40,1,-133),
-        BackgroundTransparency=1,BorderSizePixel=0,
-        ScrollBarThickness=3,ScrollBarImageColor3=Color3.fromRGB(88,93,103),
-        AutomaticCanvasSize=Enum.AutomaticSize.Y,CanvasSize=UDim2.fromOffset(0,0),
-    },menuPanel)
-    uiNew("UIListLayout", {
-        SortOrder=Enum.SortOrder.LayoutOrder,
-        Padding=UDim.new(0,4), HorizontalAlignment=Enum.HorizontalAlignment.Center,
-    },menuPlayers)
-
-    -- System Monitor: FPS, ping, memoria, jogadores e tempo de sessao.
-    monitorFrame=uiNew("Frame", {
-        Name="SystemMonitor", Position=UDim2.fromOffset(20,91),
-        Size=UDim2.new(1,-40,1,-133), BackgroundTransparency=1,
-        BorderSizePixel=0, Visible=false,
-    },menuPanel)
-
-    local function metricCard(key, title, position, size)
-        local card=uiNew("Frame", {
-            Name=key, Position=position, Size=size,
-            BackgroundColor3=Color3.fromRGB(22,24,28), BorderSizePixel=0,
-        },monitorFrame)
-        uiNew("UICorner",{CornerRadius=UDim.new(0,8)},card)
-        uiNew("UIStroke",{Color=Color3.fromRGB(39,42,48),Thickness=1},card)
-        uiText(card,title:upper(),{
-            Position=UDim2.fromOffset(13,10),Size=UDim2.new(1,-26,0,14),
-            Font=Enum.Font.GothamMedium,TextSize=9,
-            TextColor3=Color3.fromRGB(139,145,155),
-        })
-        monitorValues[key]=uiText(card,"--",{
-            Position=UDim2.fromOffset(13,29),Size=UDim2.new(1,-26,0,29),
-            Font=Enum.Font.GothamSemibold,TextSize=22,
-            TextColor3=Color3.fromRGB(238,240,244),
-        })
-    end
-
-    metricCard("FPS","Frame rate",UDim2.new(0,0,0,0),UDim2.new(0.5,-6,0,78))
-    metricCard("Ping","Network ping",UDim2.new(0.5,6,0,0),UDim2.new(0.5,-6,0,78))
-    metricCard("Memory","Client memory",UDim2.new(0,0,0,88),UDim2.new(0.5,-6,0,78))
-    metricCard("Players","Players in session",UDim2.new(0.5,6,0,88),UDim2.new(0.5,-6,0,78))
-
-    local sessionCard=uiNew("Frame",{
-        Name="SessionStatus",Position=UDim2.new(0,0,0,176),
-        Size=UDim2.new(1,0,0,67),BackgroundColor3=Color3.fromRGB(22,24,28),
-        BorderSizePixel=0,
-    },monitorFrame)
-    uiNew("UICorner",{CornerRadius=UDim.new(0,8)},sessionCard)
-    uiNew("UIStroke",{Color=Color3.fromRGB(39,42,48),Thickness=1},sessionCard)
-    uiText(sessionCard,"SESSION STATUS",{
-        Position=UDim2.fromOffset(13,9),Size=UDim2.new(1,-26,0,13),
-        Font=Enum.Font.GothamMedium,TextSize=9,
-        TextColor3=Color3.fromRGB(139,145,155),
-    })
-    monitorValues.Status=uiText(sessionCard,"ONLINE  •  CLIENT MONITOR ACTIVE",{
-        Position=UDim2.fromOffset(13,26),Size=UDim2.new(1,-26,0,17),
-        Font=Enum.Font.GothamMedium,TextSize=11,
-        TextColor3=Color3.fromRGB(220,224,231),
-    })
-    monitorValues.Uptime=uiText(sessionCard,"Session 00:00:00",{
-        Position=UDim2.fromOffset(13,44),Size=UDim2.new(1,-26,0,13),
-        Font=Enum.Font.Gotham,TextSize=9,
-        TextColor3=Color3.fromRGB(132,138,148),
-    })
-
-    menuCount=uiText(menuPanel, "INSERT: abrir/fechar  |  selecione uma aba", {
-        Position=UDim2.new(0,24,1,-32),Size=UDim2.new(1,-48,0,22),
-        TextSize=10,TextColor3=Color3.fromRGB(135,140,149),
-    })
-
-    local function readPingMs()
-        local ok, ping = pcall(function()
-            return LocalPlayer:GetNetworkPing() * 1000
-        end)
-        if ok and type(ping)=="number" and ping>=0 then return ping end
-        local okItem, item = pcall(function()
-            return Stats.Network.ServerStatsItem["Data Ping"]
-        end)
-        if okItem and item then
-            local okValue, value = pcall(function() return item:GetValue() end)
-            if okValue and type(value)=="number" then return value end
-            local okText, valueText = pcall(function() return item:GetValueString() end)
-            if okText and type(valueText)=="string" then
-                local number = tonumber(valueText:match("[%d%.]+"))
-                if number then return number end
-            end
-        end
-        return nil
-    end
-
-    local function readMemoryMb()
-        local ok, value = pcall(function()
-            return Stats:GetTotalMemoryUsageMb()
-        end)
-        if ok and type(value)=="number" then return value end
-        return nil
-    end
-
-    local function formatDuration(seconds)
-        seconds=math.max(0,math.floor(seconds))
-        local hours=math.floor(seconds/3600)
-        local minutes=math.floor((seconds%3600)/60)
-        local secs=seconds%60
-        return string.format("%02d:%02d:%02d",hours,minutes,secs)
-    end
-
-    updateSystemMonitor=function()
-        if not monitorFrame or not monitorFrame.Parent then return end
-        monitorValues.FPS.Text = currentFPS>0 and tostring(currentFPS) or "--"
-        local ping=readPingMs()
-        monitorValues.Ping.Text = ping and string.format("%.0f ms",ping) or "N/A"
-        local memory=readMemoryMb()
-        monitorValues.Memory.Text = memory and string.format("%.0f MB",memory) or "N/A"
-        monitorValues.Players.Text = tostring(#Players:GetPlayers())
-        monitorValues.Status.Text = "ONLINE  •  CLIENT MONITOR ACTIVE"
-        monitorValues.Uptime.Text = "Session  "..formatDuration(os.clock()-sessionStartedAt)
-    end
-
-    renderMenu = function()
-        if not menuPlayers or not menuPlayers.Parent then return end
-        local systemSelected = selectedTab == "system"
-        menuPlayers.Visible = not systemSelected
-        monitorFrame.Visible = systemSelected
-        local selected = selectedTab == "whitelist" and tabWhitelist
-            or (selectedTab == "incognito" and tabIncognito or tabSystem)
-        if selected==tabWhitelist then
-            underline.Position=UDim2.fromOffset(25,82)
-            underline.Size=UDim2.fromOffset(84,2)
-        elseif selected==tabIncognito then
-            underline.Position=UDim2.fromOffset(125,82)
-            underline.Size=UDim2.fromOffset(84,2)
-        else
-            underline.Position=UDim2.fromOffset(225,82)
-            underline.Size=UDim2.fromOffset(70,2)
-        end
-        tabWhitelist.TextColor3 = selected==tabWhitelist and Color3.fromRGB(238,240,244) or Color3.fromRGB(133,138,147)
-        tabIncognito.TextColor3 = selected==tabIncognito and Color3.fromRGB(238,240,244) or Color3.fromRGB(133,138,147)
-        tabSystem.TextColor3 = selected==tabSystem and Color3.fromRGB(238,240,244) or Color3.fromRGB(133,138,147)
-
-        if systemSelected then
-            updateSystemMonitor()
-            menuCount.Text="SYSTEM MONITOR  |  LIVE CLIENT TELEMETRY"
-            return
-        end
-
-        for _, child in ipairs(menuPlayers:GetChildren()) do
-            if not child:IsA("UIListLayout") then child:Destroy() end
-        end
-        local roster = {}
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer then table.insert(roster, player) end
-        end
-        table.sort(roster,function(a,b) return a.Name:lower() < b.Name:lower() end)
-        local protected = 0
-        for index, player in ipairs(roster) do
-            local active = selectedTab == "whitelist" and isWhitelisted(player) or isIncognito(player)
-            if active then protected=protected+1 end
-            local row=uiNew("Frame", {
-                Name="Player_"..tostring(player.UserId),LayoutOrder=index,
-                Size=UDim2.new(1,-5,0,47),BackgroundColor3=Color3.fromRGB(23,25,29),
-                BorderSizePixel=0,
-            },menuPlayers)
-            uiNew("UICorner",{CornerRadius=UDim.new(0,7)},row)
-            local avatar = uiNew("ImageLabel", {
-                Name="Avatar",Position=UDim2.fromOffset(8,6), Size=UDim2.fromOffset(35,35),
-                BackgroundColor3=Color3.fromRGB(36,39,44),Image="",BorderSizePixel=0,
-            },row)
-            uiNew("UICorner",{CornerRadius=UDim.new(1,0)},avatar)
-            task.spawn(function()
-                local ok, content=pcall(function()
-                    return Players:GetUserThumbnailAsync(player.UserId,Enum.ThumbnailType.HeadShot,Enum.ThumbnailSize.Size48x48)
-                end)
-                if ok and avatar.Parent then avatar.Image=content end
-            end)
-            uiText(row, player.DisplayName, {
-                Position=UDim2.fromOffset(54,5),Size=UDim2.new(1,-172,0,22),
-                Font=Enum.Font.GothamMedium,TextSize=12,TextTruncate=Enum.TextTruncate.AtEnd,
-                TextColor3=Color3.fromRGB(235,238,243),
-            })
-            if player.DisplayName ~= player.Name then
-                uiText(row,"@"..player.Name,{
-                    Position=UDim2.fromOffset(54,25), Size=UDim2.new(1,-172,0,15),
-                    TextSize=10,TextTruncate=Enum.TextTruncate.AtEnd,
-                    TextColor3=Color3.fromRGB(143,148,157),
-                })
-            end
-            local eye=uiNew("TextButton", {
-                Name="View",Size=UDim2.fromOffset(32,38),Position=UDim2.new(1,-93,0,4),
-                Text="◉",BackgroundTransparency=1,Font=Enum.Font.GothamBold,
-                TextSize=19, TextColor3=spectateTarget==player and Color3.fromRGB(210,216,225) or Color3.fromRGB(165,174,187),
-                AutoButtonColor=false,
-            },row)
-            eye.Activated:Connect(function()
-                startSpectating(player)
-                renderMenu()
-            end)
-            local toggle=uiNew("TextButton", {
-                Name="Toggle",Size=UDim2.fromOffset(52,36),Position=UDim2.new(1,-57,0,5),
-                Text=active and "ON" or "OFF",BackgroundTransparency=1,
-                TextColor3=active and Color3.fromRGB(210,216,225) or Color3.fromRGB(133,138,147),
-                Font=Enum.Font.GothamMedium,TextSize=11,AutoButtonColor=false,
-            },row)
-            toggle.Activated:Connect(function()
-                local list=selectedTab=="whitelist" and Config.Triggerbot.Whitelist.List or Config.IncognitoWhitelist
-                local key=tostring(player.UserId)
-                if isInList(list,player) then
-                    list[key]=nil
-                    list[player.UserId]=nil
-                    list[player.Name]=nil
-                    for k,v in pairs(list) do
-                        if v == player.UserId or v == tostring(player.UserId) or v == player.Name then list[k]=nil end
-                    end
-                else
-                    list[key]=true
-                end
-                if camTarget == player and not onWhitelist(player) then camTarget=nil end
-                refreshESP()
-                renderMenu()
-            end)
-        end
-        if #roster==0 then
-            uiText(menuPlayers,"Nenhum outro jogador na sessao",{
-                Size=UDim2.new(1,-20,0,42),TextSize=13,
-                TextColor3=Color3.fromRGB(145,150,159),
-                TextXAlignment=Enum.TextXAlignment.Center,
-            })
-        end
-        local msg=selectedTab=="whitelist" and "Protegidos" or "Ocultos"
-        menuCount.Text=string.format("%s: %d  |  INSERT: abrir/fechar  |  ◉: view",msg,protected)
-    end
-    tabWhitelist.Activated:Connect(function() selectedTab="whitelist" renderMenu() end)
-    tabIncognito.Activated:Connect(function() selectedTab="incognito" renderMenu() end)
-    tabSystem.Activated:Connect(function() selectedTab="system" renderMenu() end)
-
-    -- Arrastar pelo topo, sem depender de APIs especiais do executor.
-    local dragging=false
-    local dragOrigin, startPosition
-    menuPanel.InputBegan:Connect(function(input)
-        if input.UserInputType==Enum.UserInputType.MouseButton1 then
-            local xy=input.Position
-            local top=menuPanel.AbsolutePosition.Y
-            if xy.Y>=top and xy.Y<=top+52 then
-                dragging=true
-                dragOrigin=xy
-                startPosition=menuPanel.Position
-            end
-        end
-    end)
-    connectSignal(UserInputService.InputEnded,function(input)
-        if input.UserInputType==Enum.UserInputType.MouseButton1 then dragging=false end
-    end)
-    connectSignal(UserInputService.InputChanged,function(input)
-        if dragging and input.UserInputType==Enum.UserInputType.MouseMovement then
-            local d=input.Position-dragOrigin
-            menuPanel.Position=UDim2.new(startPosition.X.Scale,startPosition.X.Offset+d.X,startPosition.Y.Scale,startPosition.Y.Offset+d.Y)
-        end
-    end)
-    renderMenu()
-end
-
-buildMenu()
-connectSignal(RunService.RenderStepped,function(dt)
-    if dt>0 then
-        fpsFrameCount=fpsFrameCount+1
-        fpsElapsed=fpsElapsed+dt
-    end
-    if fpsElapsed>=0.5 then
-        currentFPS=math.floor((fpsFrameCount/fpsElapsed)+0.5)
-        fpsFrameCount=0
-        fpsElapsed=0
-    end
-end)
-connectSignal(UserInputService.InputBegan,function(input,processed)
-    if processed or input.UserInputType~=Enum.UserInputType.Keyboard then return end
-    if input.KeyCode==Enum.KeyCode.Insert and menuGui then
-        menuVisible=not menuVisible
-        menuGui.Enabled=menuVisible
-        if menuVisible and renderMenu then renderMenu() end
-    end
-end)
-connectSignal(Players.PlayerAdded,function()
-    if renderMenu and menuGui and menuGui.Parent then renderMenu() end
-end)
-connectSignal(Players.PlayerRemoving,function(player)
-    if spectateTarget==player then stopSpectating() end
-    task.defer(function()
-        if renderMenu and menuGui and menuGui.Parent then renderMenu() end
-    end)
-end)
-connectSignal(RunService.Heartbeat,function(dt)
-    if spectateTarget and spectateTarget.Parent==Players then
-        local hum=humanoidOf(charOf(spectateTarget))
-        local cam=camera()
-        if hum and cam and cam.CameraSubject~=hum then
-            cam.CameraType=Enum.CameraType.Custom
-            cam.CameraSubject=hum
-        end
-    end
-    if menuVisible and selectedTab=="system" and updateSystemMonitor then
-        monitorRefreshElapsed=monitorRefreshElapsed+(dt or 0)
-        if monitorRefreshElapsed>=0.5 then
-            monitorRefreshElapsed=0
-            updateSystemMonitor()
-        end
+    if renderConnection then
+        fpsValue = frameCount
+        frameCount = 0
     else
-        monitorRefreshElapsed=0
+        fpsValue = 0
+    end
+
+    local fpsText = fpsValue > 0 and tostring(fpsValue) or "N/A"
+    local pingText = readPing()
+    local memoryText = readMemory()
+    local playerText = tostring(#Players:GetPlayers())
+    local sessionText = "Session " .. formatDuration(os.clock() - sessionStart)
+
+    overviewFps.Text = fpsText
+    overviewPing.Text = pingText
+    overviewMemory.Text = memoryText
+    overviewPlayers.Text = playerText
+    overviewSession.Text = sessionText
+
+    systemFps.Text = fpsText
+    systemPing.Text = pingText
+    systemMemory.Text = memoryText
+    systemPlayers.Text = playerText
+end
+
+task.spawn(function()
+    while screenGui.Parent do
+        if shouldSample() then
+            updateMonitor()
+        else
+            refreshFrameSampler()
+        end
+        task.wait(1)
     end
 end)
 
-local function stop()
-    if not running then return end
-    running = false
-    stopSpectating()
-    if menuGui and menuGui.Parent then menuGui:Destroy() end
-    menuGui = nil
-    for _, conn in ipairs(connections) do
-        pcall(function() conn:Disconnect() end)
+-- Settings interactions
+keyButton.MouseButton1Click:Connect(function()
+    waitingForKey = true
+    keyButton.Text = "PRESS KEY..."
+    notify("Press a key for the panel shortcut.")
+end)
+
+monitorButton.MouseButton1Click:Connect(function()
+    SETTINGS.monitorEnabled = not SETTINGS.monitorEnabled
+    monitorButton.Text = SETTINGS.monitorEnabled and "ON" or "OFF"
+    overviewStatusValue.Text = SETTINGS.monitorEnabled and "CLIENT READY  •  MONITOR ENABLED" or "CLIENT READY  •  MONITOR PAUSED"
+    refreshFrameSampler()
+    addLog("System monitor " .. (SETTINGS.monitorEnabled and "enabled." or "paused."), "success")
+    notify("System monitor " .. (SETTINGS.monitorEnabled and "enabled." or "paused."))
+end)
+
+compactButton.MouseButton1Click:Connect(function()
+    SETTINGS.compact = not SETTINGS.compact
+    compactButton.Text = SETTINGS.compact and "ON" or "OFF"
+    main.Size = SETTINGS.compact and UDim2.fromOffset(620, 430) or UDim2.fromOffset(700, 480)
+    notify(SETTINGS.compact and "Compact layout enabled." or "Standard layout enabled.")
+    addLog("Layout changed: " .. (SETTINGS.compact and "compact." or "standard."), "success")
+end)
+
+local function applyAccent()
+    Theme.accent = ACCENTS[SETTINGS.accentName]
+    logoMark.BackgroundColor3 = Theme.surfaceHover
+    for _, nav in pairs(navButtons) do
+        nav.indicator.BackgroundColor3 = Theme.accent
     end
-    for player in pairs(espObjects) do clearESP(player) end
-    restoreHitboxes()
-    restoreSpread()
-    if env.DHC_Stop == stop then env.DHC_Stop = nil end
-    if env.DHC_Status == status then env.DHC_Status = nil end
-    print("[V4ware V19] Parado; menu fechado e constantes restauradas onde possivel.")
 end
 
-env.DHC_Stop = stop
-env.DHC_Status = status
-refreshESP()
-updateHitboxes()
-updateSpread()
-print("[V4ware V19] Iniciado: INSERT menu (Whitelist / Incognito / System) | Pulo somente COM OS PES APOIADOS; sem buffer, sem voo e sem cooldown artificial")
-print("[V4ware V19] Trigger: delay cliente 0 | DB 180 | Revolver 260 | Tactical 180 | limite geral 280 studs")
-print("[V4ware V19] Menu: INSERT | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
-warn("[V4ware V19] Experimento de patch de CONSTANTES especificas. Sem hook FireServer; resultado real nao testado.")
-print("[V4ware WS] Weapon Switch ativo: V -> DB / Tactical / Revolver, respeitando cooldowns do jogo")
+accentButton.MouseButton1Click:Connect(function()
+    SETTINGS.accentName = SETTINGS.accentName == "Silver" and "Ice" or "Silver"
+    accentButton.Text = SETTINGS.accentName
+    applyAccent()
+    addLog("Accent changed to " .. SETTINGS.accentName .. ".", "success")
+    notify("Accent: " .. SETTINGS.accentName)
+end)
+
+-- Header drag
+do
+    local dragging = false
+    local dragInput = nil
+    local dragStart = nil
+    local startPosition = nil
+
+    header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPosition = main.Position
+            dragInput = input
+
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                    dragInput = nil
+                end
+            end)
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            main.Position = UDim2.new(
+                startPosition.X.Scale,
+                startPosition.X.Offset + delta.X,
+                startPosition.Y.Scale,
+                startPosition.Y.Offset + delta.Y
+            )
+        end
+    end)
+end
+
+local minimized = false
+minimizeButton.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    body.Visible = not minimized
+    main.Size = minimized and UDim2.fromOffset(700, 68) or (SETTINGS.compact and UDim2.fromOffset(620, 430) or UDim2.fromOffset(700, 480))
+    minimizeButton.Text = minimized and "+" or "—"
+    refreshFrameSampler()
+end)
+
+closeButton.MouseButton1Click:Connect(function()
+    main.Visible = false
+    refreshFrameSampler()
+end)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if waitingForKey then
+        if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode ~= Enum.KeyCode.Unknown then
+            SETTINGS.openKey = input.KeyCode
+            keyButton.Text = SETTINGS.openKey.Name
+            waitingForKey = false
+            addLog("Panel shortcut changed to " .. SETTINGS.openKey.Name .. ".", "success")
+            notify("Shortcut updated.")
+        end
+        return
+    end
+
+    if gameProcessed then
+        return
+    end
+
+    if input.KeyCode == SETTINGS.openKey then
+        if minimized then
+            minimized = false
+            body.Visible = true
+            main.Size = SETTINGS.compact and UDim2.fromOffset(620, 430) or UDim2.fromOffset(700, 480)
+            minimizeButton.Text = "—"
+        else
+            main.Visible = not main.Visible
+        end
+        refreshFrameSampler()
+    end
+end)
+
+-- Keep the monitor sampler in sync with page visibility and panel visibility.
+local originalSetPage = setPage
+setPage = function(name)
+    originalSetPage(name)
+    refreshFrameSampler()
+end
+
+main:GetPropertyChangedSignal("Visible"):Connect(refreshFrameSampler)
+
+-- Startup
+keyButton.Text = SETTINGS.openKey.Name
+monitorButton.Text = SETTINGS.monitorEnabled and "ON" or "OFF"
+compactButton.Text = "OFF"
+accentButton.Text = SETTINGS.accentName
+setPage("Overview")
+addLog("V4ware V20 initialized.", "success")
+addLog("Local diagnostics ready.", "success")
+refreshFrameSampler()
+
+print("[V4ware V20] Clean Control Center initialized.")
