@@ -1,4 +1,4 @@
--- PAIN HOOD V17 - IMPLEMENTACAO REMOTA (separada da configuracao)
+-- PAIN HOOD V18 - IMPLEMENTACAO REMOTA (separada da configuracao)
 -- Este arquivo pressupoe que a tabela global Config ja existe no ambiente que o carrega.
 -- Mantenha a configuracao no arquivo/trecho local e hospede este arquivo como Main.lua.
 
@@ -39,6 +39,13 @@ local spreadCandidatesSeen = 0
 local spreadAttempted = false
 local spreadLastError = nil
 local triggerActive = false
+-- Weapon Switch: uma tecla executa a sequencia de armas, sem alterar cooldowns do jogo.
+local weaponSwitchBusy = false
+local weaponSwitchLastStart = -1e9
+local weaponSwitchLastResult = "Ainda nao acionado"
+local weaponSwitchLastError = nil
+local weaponSwitchLastAttempts = 0
+local weaponSwitchLastSkipped = 0
 local rightMouseHeld = false
 local espActive = Config.ESP.Enabled
 local camActive = false
@@ -292,6 +299,7 @@ local function attemptShot(tool)
 end
 
 local function updateTrigger()
+    if weaponSwitchBusy then return end -- evita disparos concorrentes durante a sequencia
     if not Config.Triggerbot.Enabled or not triggerActive then return end
     -- FireDelay=0: nenhuma espera artificial antes de tentar Tool:Activate().
     -- Executa a checagem a cada RenderStepped; nao acelera a cadencia imposta pelo jogo.
@@ -552,7 +560,7 @@ local function updateSpread()
         spreadLastError = "PlaceId nao corresponde a uma experiencia analisada"
         if not warnedSpread then
             warnedSpread = true
-            warn("[PH V17] Experiencia nao corresponde ao Pain Hood analisado; spread nao modificado.")
+            warn("[PH V18] Experiencia nao corresponde ao Pain Hood analisado; spread nao modificado.")
         end
         return
     end
@@ -562,7 +570,7 @@ local function updateSpread()
         spreadLastError = apiError
         if not warnedSpread then
             warnedSpread = true
-            warn("[PH V17] Spread inativo: " .. apiError)
+            warn("[PH V18] Spread inativo: " .. apiError)
         end
         return
     end
@@ -578,7 +586,7 @@ local function updateSpread()
     end
     if not gcOk or type(objects) ~= "table" then
         spreadLastError = "getgc nao retornou funcoes"
-        warn("[PH V17] Spread inativo: " .. spreadLastError)
+        warn("[PH V18] Spread inativo: " .. spreadLastError)
         return
     end
 
@@ -635,16 +643,16 @@ local function updateSpread()
     if not warnedSpread then
         warnedSpread = true
         if changed > 0 then
-            warn(("[PH V17] %d constantes ajustadas em %d funcao(oes) identificada(s). Resultado visual/servidor ainda precisa de validacao.")
+            warn(("[PH V18] %d constantes ajustadas em %d funcao(oes) identificada(s). Resultado visual/servidor ainda precisa de validacao.")
                 :format(changed, matches))
         else
-            warn("[PH V17] Nenhuma constante ativa foi alterada: " .. tostring(spreadLastError or "sem constantes confirmadas"))
+            warn("[PH V18] Nenhuma constante ativa foi alterada: " .. tostring(spreadLastError or "sem constantes confirmadas"))
         end
-        warn(("[PH V17] Contagem por arma: DB=%d | Tactical=%d | Revolver=%d")
+        warn(("[PH V18] Contagem por arma: DB=%d | Tactical=%d | Revolver=%d")
             :format(spreadPatched["[Double-Barrel SG]"] or 0,
                     spreadPatched["[TacticalShotgun]"] or 0,
                     spreadPatched["[Revolver]"] or 0))
-        warn("[PH V17] Revolver permanece sem identificacao confirmada no bytecode analisado.")
+        warn("[PH V18] Revolver permanece sem identificacao confirmada no bytecode analisado.")
     end
 end
 
@@ -683,6 +691,123 @@ local function autoSwitch()
     end
     if not selected then selected = backpack:FindFirstChildOfClass("Tool") end
     if selected then hum:EquipTool(selected) end
+end
+
+-- =============================================================
+-- V4WARE WEAPON SWITCH V18: UMA TECLA, TRES ARMAS EM SEQUENCIA
+-- =============================================================
+-- Usa exclusivamente Humanoid:EquipTool e Tool:Activate/Deactivate.
+-- Nao modifica recarga, cadencia, eventos remotos ou validacoes do jogo.
+-- A chamada Activate confirma uma tentativa, nao o registro do tiro no servidor.
+local function weaponSwitchConfig()
+    if type(Config.WeaponSwitch) ~= "table" then
+        Config.WeaponSwitch = {
+            Enabled = true, Key = "V",
+            Order = {"[Double-Barrel SG]", "[TacticalShotgun]", "[Revolver]"},
+            EquipDelay = 0.20, ShotHold = 0.06, BetweenDelay = 0.12,
+            Cooldown = 1.50, RestorePrevious = true, SkipEmpty = true,
+        }
+    end
+    return Config.WeaponSwitch
+end
+
+local function findWeapon(name, backpack, character)
+    local t = character and character:FindFirstChild(name)
+    if not (t and t:IsA("Tool")) then
+        t = backpack and backpack:FindFirstChild(name)
+    end
+    return t and t:IsA("Tool") and t or nil
+end
+
+local function weaponAmmoEmpty(tool)
+    -- Fica desativavel no Config: algumas armas usam contadores diferentes.
+    local ammo = tool:FindFirstChild("Ammo") or tool:FindFirstChild("ClientAmmo")
+    return ammo and ammo:IsA("ValueBase") and type(ammo.Value) == "number" and ammo.Value <= 0
+end
+
+local function requestWeaponSwitch()
+    local cfg = weaponSwitchConfig()
+    if not cfg.Enabled or weaponSwitchBusy or not running then return end
+    local now = os.clock()
+    local cooldown = math.clamp(tonumber(cfg.Cooldown) or 1.5, 0, 30)
+    if now - weaponSwitchLastStart < cooldown then return end
+    local character = charOf(LocalPlayer)
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    local hum = humanoidOf(character)
+    if not character or not backpack or not hum or hum.Health <= 0 then
+        weaponSwitchLastError = "Personagem/Backpack/Humanoid indisponivel"
+        return
+    end
+    if type(cfg.Order) ~= "table" then
+        weaponSwitchLastError = "WeaponSwitch.Order deve ser uma lista"
+        return
+    end
+
+    weaponSwitchBusy = true
+    weaponSwitchLastStart = now
+    weaponSwitchLastError = nil
+    weaponSwitchLastResult = "Em andamento"
+    weaponSwitchLastAttempts = 0
+    weaponSwitchLastSkipped = 0
+
+    local original = equippedTool()
+    task.spawn(function()
+        local ok, err = pcall(function()
+            local equipDelay = math.clamp(tonumber(cfg.EquipDelay) or 0.20, 0.05, 2)
+            local shotHold = math.clamp(tonumber(cfg.ShotHold) or 0.06, 0, 0.5)
+            local between = math.clamp(tonumber(cfg.BetweenDelay) or 0.12, 0, 2)
+            for _, name in ipairs(cfg.Order) do
+                if not running or charOf(LocalPlayer) ~= character or hum.Health <= 0 then
+                    weaponSwitchLastError = "Sequencia interrompida: personagem mudou"
+                    break
+                end
+                local tool = findWeapon(tostring(name), backpack, character)
+                if not tool then
+                    weaponSwitchLastSkipped = weaponSwitchLastSkipped + 1
+                    warn("[V4ware WS] Arma nao encontrada: " .. tostring(name))
+                elseif cfg.SkipEmpty and weaponAmmoEmpty(tool) then
+                    weaponSwitchLastSkipped = weaponSwitchLastSkipped + 1
+                    warn("[V4ware WS] Sem municao: " .. tostring(name))
+                else
+                    if tool.Parent ~= character then
+                        local equipOk = pcall(function() hum:EquipTool(tool) end)
+                        if not equipOk then
+                            weaponSwitchLastSkipped = weaponSwitchLastSkipped + 1
+                            warn("[V4ware WS] Falha ao equipar: " .. tostring(name))
+                        end
+                    end
+                    task.wait(equipDelay)
+                    if running and tool.Parent == character then
+                        local fireOk, fireErr = pcall(function() tool:Activate() end)
+                        if fireOk then
+                            weaponSwitchLastAttempts = weaponSwitchLastAttempts + 1
+                            print("[V4ware WS] Ativacao solicitada: " .. tostring(name))
+                        else
+                            weaponSwitchLastSkipped = weaponSwitchLastSkipped + 1
+                            weaponSwitchLastError = tostring(fireErr)
+                            warn("[V4ware WS] Erro em Activate: " .. tostring(fireErr))
+                        end
+                        if shotHold > 0 then task.wait(shotHold) end
+                        pcall(function() tool:Deactivate() end)
+                    else
+                        weaponSwitchLastSkipped = weaponSwitchLastSkipped + 1
+                        warn("[V4ware WS] A arma nao ficou equipada: " .. tostring(name))
+                    end
+                    if between > 0 then task.wait(between) end
+                end
+            end
+            if running and cfg.RestorePrevious and original and original.Parent and
+                charOf(LocalPlayer) == character and hum.Health > 0 then
+                pcall(function() hum:EquipTool(original) end)
+            end
+        end)
+        if not ok then weaponSwitchLastError = tostring(err) end
+        weaponSwitchLastResult = ("%d ativacao(oes) solicitada(s); %d ignorada(s)")
+            :format(weaponSwitchLastAttempts, weaponSwitchLastSkipped)
+        print("[V4ware WS] " .. weaponSwitchLastResult)
+        if weaponSwitchLastError then warn("[V4ware WS] " .. weaponSwitchLastError) end
+        weaponSwitchBusy = false
+    end)
 end
 
 local function tp(position)
@@ -1081,6 +1206,11 @@ connectSignal(UserInputService.InputBegan, function(input, processed)
         camActive = not camActive
         camTarget = camActive and findCamTarget() or nil
     end
+    local wsCfg = weaponSwitchConfig()
+    if wsCfg.Enabled and pressed(input, wsCfg.Key or "V") then
+        requestWeaponSwitch()
+        return
+    end
     if pressed(input, Config.InventorySorter.Key) then sortInventory() end
     if pressed(input, Config.AutoSwitch.Key) then autoSwitch() end
 end)
@@ -1130,7 +1260,7 @@ local function status()
     local localMatches = {}
     for name, count in pairs(spreadMatches) do localMatches[name] = count end
     return {
-        Version = 17,
+        Version = 18,
         Running = running,
         InfiniteJump = false,
         NoJumpCooldown = Config.Movement["No Jump Cooldown"],
@@ -1189,6 +1319,13 @@ local function status()
         SpreadScanAttempted = spreadAttempted,
         SpreadCandidatesSeen = spreadCandidatesSeen,
         SpreadLastError = spreadLastError,
+        WeaponSwitchEnabled = weaponSwitchConfig().Enabled,
+        WeaponSwitchKey = weaponSwitchConfig().Key,
+        WeaponSwitchBusy = weaponSwitchBusy,
+        WeaponSwitchLastAttempts = weaponSwitchLastAttempts,
+        WeaponSwitchLastSkipped = weaponSwitchLastSkipped,
+        WeaponSwitchLastResult = weaponSwitchLastResult,
+        WeaponSwitchLastError = weaponSwitchLastError,
         SpreadRealVerified = false, -- validacao de dano/trajetoria do servidor nao foi testada
         RemoteHooks = false,
     }
@@ -1504,7 +1641,7 @@ local function stop()
     restoreSpread()
     if env.DHC_Stop == stop then env.DHC_Stop = nil end
     if env.DHC_Status == status then env.DHC_Status = nil end
-    print("[PH V17] Parado; menu fechado e constantes restauradas onde possivel.")
+    print("[PH V18] Parado; menu fechado e constantes restauradas onde possivel.")
 end
 
 env.DHC_Stop = stop
@@ -1512,7 +1649,8 @@ env.DHC_Status = status
 refreshESP()
 updateHitboxes()
 updateSpread()
-print("[PH V17] Iniciado: INSERT menu | Pulo somente COM OS PES APOIADOS; sem buffer, sem voo e sem cooldown artificial")
-print("[PH V17] Trigger: delay cliente 0 | DB 180 | Revolver 260 | Tactical 180 | limite geral 280 studs")
-print("[PH V17] Menu: INSERT | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
-warn("[PH V17] Experimento de patch de CONSTANTES especificas. Sem hook FireServer; resultado real nao testado.")
+print("[PH V18] Iniciado: INSERT menu | Pulo somente COM OS PES APOIADOS; sem buffer, sem voo e sem cooldown artificial")
+print("[PH V18] Trigger: delay cliente 0 | DB 180 | Revolver 260 | Tactical 180 | limite geral 280 studs")
+print("[PH V18] Menu: INSERT | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
+warn("[PH V18] Experimento de patch de CONSTANTES especificas. Sem hook FireServer; resultado real nao testado.")
+print("[V4ware WS] Weapon Switch V18 ativo: V -> DB / Tactical / Revolver, respeitando cooldowns do jogo")
