@@ -1,4 +1,4 @@
--- V4WARE V20.1 - PREMIUM HOVER (base V20 preservada, Config separada)
+-- V4WARE V20.2 - PREMIUM HOVER + HITBOX SETTINGS (base V20.1 preservada, Config separada)
 -- Este arquivo pressupoe que a tabela global Config ja existe no ambiente que o carrega.
 -- Mantenha a configuracao no arquivo/trecho local e hospede este arquivo como Main.lua.
 
@@ -29,6 +29,22 @@ if type(oldCfg) == "table" then
 end
 
 env.DHC_Config = Config
+
+-- Normaliza a configuracao do Hitbox Expander para que o painel e o modulo
+-- leiam/escrevam exatamente a mesma tabela durante a sessao.
+if type(Config.HitboxExpander) ~= "table" then
+    Config.HitboxExpander = {}
+end
+Config.HitboxExpander.Enabled = Config.HitboxExpander.Enabled == true
+Config.HitboxExpander.X = tonumber(Config.HitboxExpander.X) or 2
+Config.HitboxExpander.Y = tonumber(Config.HitboxExpander.Y) or 2
+Config.HitboxExpander.Z = tonumber(Config.HitboxExpander.Z) or 1
+Config.HitboxExpander.RefreshTime = math.max(0.05, tonumber(Config.HitboxExpander.RefreshTime) or 1)
+Config.HitboxExpander.Visible = Config.HitboxExpander.Visible == true
+Config.HitboxExpander.Transparency = math.clamp(tonumber(Config.HitboxExpander.Transparency) or 0.5, 0, 1)
+if typeof(Config.HitboxExpander.Color) ~= "Color3" then
+    Config.HitboxExpander.Color = Color3.fromRGB(255, 60, 60)
+end
 local spectateTarget = nil
 local spectateOldType = nil
 local spectateOldSubject = nil
@@ -1710,7 +1726,7 @@ local function buildMenu()
     local nav = uiNew("Frame", {
         Name = "Navigation",
         Position = UDim2.fromOffset(9, 45),
-        Size = UDim2.new(1, -18, 0, 230),
+        Size = UDim2.new(1, -18, 0, 300),
         BackgroundTransparency = 1,
     }, sidebar)
     uiNew("UIListLayout", {
@@ -1759,6 +1775,7 @@ local function buildMenu()
     local playersPage = makePage("Players")
     local systemPage = makePage("System")
     local spreadPage = makePage("Spread")
+    local hitboxPage = makePage("Hitbox")
     local settingsPage = makePage("Settings")
 
     local function heading(parent, title, subtitle)
@@ -1859,8 +1876,9 @@ local function buildMenu()
     navItem("Overview", "Session summary", "⌂", 1)
     navItem("Players", "Whitelist / Incognito", "◎", 2)
     navItem("Spread", "Weapon tuning", "◌", 3)
-    navItem("System", "Performance", "◫", 4)
-    navItem("Settings", "Preferences", "⚙", 5)
+    navItem("Hitbox", "Hitbox settings", "▣", 4)
+    navItem("System", "Performance", "◫", 5)
+    navItem("Settings", "Preferences", "⚙", 6)
 
     local function metricCard(parent, key, title, x, y, width)
         local card = uiCard(parent, key, UDim2.fromOffset(x, y), UDim2.fromOffset(width, 82))
@@ -2201,6 +2219,219 @@ local function buildMenu()
         spreadStatus.TextColor3 = Color3.fromRGB(226, 185, 112)
     end)
 
+    -- Hitbox settings. The controls below write directly to the existing
+    -- Config.HitboxExpander table consumed by updateHitboxes().
+    local hitboxCfg = Config.HitboxExpander
+    local hitboxRows = {}
+    local hitboxStatus
+    heading(hitboxPage, "Hitbox settings", "Dimensions in studs  •  Transparency: 0 = opaque / 1 = invisible.")
+
+    local hitboxTop = uiCard(hitboxPage, "HitboxModuleCard", UDim2.fromOffset(22, 72), UDim2.new(1, -44, 0, 58))
+    uiText(hitboxTop, "HITBOX EXPANDER", {
+        Position = UDim2.fromOffset(13, 7),
+        Size = UDim2.fromOffset(145, 16),
+        Font = Enum.Font.GothamSemibold,
+        TextSize = 10,
+    })
+    uiText(hitboxTop, "Enable module and choose whether the resized part is visible.", {
+        Position = UDim2.fromOffset(13, 27),
+        Size = UDim2.new(1, -260, 0, 15),
+        Font = Enum.Font.Gotham,
+        TextSize = 8,
+        TextColor3 = Color3.fromRGB(133, 143, 157),
+    })
+
+    local hitboxEnabledButton = uiButton(hitboxTop, hitboxCfg.Enabled and "ON" or "OFF", {
+        Position = UDim2.new(1, -178, 0, 14),
+        Size = UDim2.fromOffset(70, 30),
+        TextSize = 9,
+        TextColor3 = hitboxCfg.Enabled and Color3.fromRGB(111, 207, 151) or Color3.fromRGB(143, 151, 163),
+    })
+    local hitboxVisibleButton = uiButton(hitboxTop, hitboxCfg.Visible and "VISIBLE" or "HIDDEN", {
+        Position = UDim2.new(1, -96, 0, 14),
+        Size = UDim2.fromOffset(82, 30),
+        TextSize = 8,
+        TextColor3 = hitboxCfg.Visible and accentColor or Color3.fromRGB(143, 151, 163),
+    })
+
+    local function hitboxValue(key, fallback, minimum, maximum)
+        local value = tonumber(hitboxCfg[key]) or fallback
+        return math.clamp(value, minimum, maximum)
+    end
+
+    local function updateHitboxRow(key)
+        local row = hitboxRows[key]
+        if not row then return end
+        local value = hitboxValue(key, row.default, row.minimum, row.maximum)
+        row.value.Text = string.format("%.2f", value)
+        local fraction = (value - row.minimum) / (row.maximum - row.minimum)
+        row.fill.Size = UDim2.new(math.clamp(fraction, 0, 1), 0, 1, 0)
+    end
+
+    local function setHitboxValue(key, value)
+        local row = hitboxRows[key]
+        if not row then return end
+        hitboxCfg[key] = math.clamp(value, row.minimum, row.maximum)
+        updateHitboxRow(key)
+        hitboxStatus.Text = "UNAPPLIED CHANGE  •  CLICK APPLY CHANGES"
+        hitboxStatus.TextColor3 = Color3.fromRGB(226, 185, 112)
+    end
+
+    local function makeHitboxValueCard(key, title, x, y, minimum, maximum, step, fallback)
+        local card = uiCard(hitboxPage, "Hitbox_" .. key, UDim2.fromOffset(x, y), UDim2.fromOffset(260, 70))
+        uiText(card, title, {
+            Position = UDim2.fromOffset(13, 8),
+            Size = UDim2.new(1, -160, 0, 17),
+            Font = Enum.Font.GothamSemibold,
+            TextSize = 10,
+        })
+        local value = uiNew("TextBox", {
+            Position = UDim2.new(1, -125, 0, 7),
+            Size = UDim2.fromOffset(50, 18),
+            BackgroundTransparency = 1,
+            Text = string.format("%.2f", hitboxValue(key, fallback, minimum, maximum)),
+            ClearTextOnFocus = false,
+            Font = Enum.Font.GothamBold,
+            TextSize = 10,
+            TextXAlignment = Enum.TextXAlignment.Right,
+            TextColor3 = accentColor,
+            BorderSizePixel = 0,
+        }, card)
+        local minus = uiButton(card, "−", {
+            Position = UDim2.new(1, -66, 0, 7),
+            Size = UDim2.fromOffset(25, 23),
+            TextSize = 14,
+        })
+        local plus = uiButton(card, "+", {
+            Position = UDim2.new(1, -35, 0, 7),
+            Size = UDim2.fromOffset(25, 23),
+            TextSize = 13,
+        })
+        local track = uiNew("Frame", {
+            Position = UDim2.fromOffset(13, 43),
+            Size = UDim2.new(1, -26, 0, 7),
+            BackgroundColor3 = Color3.fromRGB(43, 49, 58),
+            BorderSizePixel = 0,
+        }, card)
+        uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, track)
+        local fill = uiNew("Frame", {
+            Size = UDim2.new(0, 0, 1, 0),
+            BackgroundColor3 = accentColor,
+            BorderSizePixel = 0,
+        }, track)
+        uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, fill)
+
+        hitboxRows[key] = {
+            value = value, fill = fill, minimum = minimum,
+            maximum = maximum, step = step, default = fallback,
+        }
+
+        value.FocusLost:Connect(function()
+            local normalizedText = value.Text:gsub(",", ".")
+            local typed = tonumber(normalizedText)
+            if typed == nil then
+                updateHitboxRow(key)
+                return
+            end
+            setHitboxValue(key, typed)
+        end)
+        minus.Activated:Connect(function()
+            setHitboxValue(key, hitboxValue(key, fallback, minimum, maximum) - step)
+        end)
+        plus.Activated:Connect(function()
+            setHitboxValue(key, hitboxValue(key, fallback, minimum, maximum) + step)
+        end)
+        updateHitboxRow(key)
+    end
+
+    makeHitboxValueCard("X", "Size X (studs)", 22, 144, 1, 50, 0.5, 2)
+    makeHitboxValueCard("Y", "Size Y (studs)", 300, 144, 1, 50, 0.5, 2)
+    makeHitboxValueCard("Z", "Size Z (studs)", 22, 226, 1, 50, 0.5, 1)
+    makeHitboxValueCard("Transparency", "Transparency", 300, 226, 0, 1, 0.05, 0.5)
+
+    local applyHitboxButton = uiButton(hitboxPage, "APPLY CHANGES", {
+        Position = UDim2.fromOffset(22, 310),
+        Size = UDim2.fromOffset(132, 31),
+        BackgroundColor3 = Color3.fromRGB(38, 49, 62),
+        TextColor3 = Color3.fromRGB(228, 237, 248),
+    })
+    local resetHitboxButton = uiButton(hitboxPage, "RESET DEFAULTS", {
+        Position = UDim2.fromOffset(162, 310),
+        Size = UDim2.fromOffset(124, 31),
+    })
+    hitboxStatus = uiText(hitboxPage, "Module status: waiting for settings.", {
+        Position = UDim2.fromOffset(23, 350),
+        Size = UDim2.new(1, -46, 0, 38),
+        Font = Enum.Font.Gotham,
+        TextSize = 9,
+        TextColor3 = Color3.fromRGB(133, 143, 157),
+        TextWrapped = true,
+    })
+
+    local function refreshHitboxStatus()
+        local enabledText = hitboxCfg.Enabled and "ENABLED" or "DISABLED"
+        local visibleText = hitboxCfg.Visible and "VISIBLE" or "HIDDEN"
+        hitboxStatus.Text = string.format(
+            "%s  •  X %.2f / Y %.2f / Z %.2f  •  %s  •  Refresh %.2fs",
+            enabledText,
+            hitboxValue("X", 2, 1, 50),
+            hitboxValue("Y", 2, 1, 50),
+            hitboxValue("Z", 1, 1, 50),
+            visibleText,
+            math.max(0.05, tonumber(hitboxCfg.RefreshTime) or 1)
+        )
+        hitboxStatus.TextColor3 = hitboxCfg.Enabled and Color3.fromRGB(111, 207, 151)
+            or Color3.fromRGB(133, 143, 157)
+    end
+
+    local function applyHitboxChanges()
+        hitboxCfg.X = hitboxValue("X", 2, 1, 50)
+        hitboxCfg.Y = hitboxValue("Y", 2, 1, 50)
+        hitboxCfg.Z = hitboxValue("Z", 1, 1, 50)
+        hitboxCfg.Transparency = hitboxValue("Transparency", 0.5, 0, 1)
+        hitboxCfg.RefreshTime = math.max(0.05, tonumber(hitboxCfg.RefreshTime) or 1)
+        for key in pairs(hitboxRows) do updateHitboxRow(key) end
+
+        local ok, err = pcall(updateHitboxes)
+        nextHitbox = os.clock() + hitboxCfg.RefreshTime
+        refreshDashboard()
+        refreshHitboxStatus()
+        if ok then
+            hitboxStatus.Text = hitboxStatus.Text .. "  •  APPLIED"
+            hitboxStatus.TextColor3 = Color3.fromRGB(111, 207, 151)
+        else
+            hitboxStatus.Text = "APPLY FAILED  •  " .. tostring(err)
+            hitboxStatus.TextColor3 = Color3.fromRGB(224, 119, 119)
+        end
+    end
+
+    hitboxEnabledButton.Activated:Connect(function()
+        hitboxCfg.Enabled = not hitboxCfg.Enabled
+        hitboxEnabledButton.Text = hitboxCfg.Enabled and "ON" or "OFF"
+        hitboxEnabledButton.TextColor3 = hitboxCfg.Enabled and Color3.fromRGB(111, 207, 151)
+            or Color3.fromRGB(143, 151, 163)
+        applyHitboxChanges()
+    end)
+
+    hitboxVisibleButton.Activated:Connect(function()
+        hitboxCfg.Visible = not hitboxCfg.Visible
+        hitboxVisibleButton.Text = hitboxCfg.Visible and "VISIBLE" or "HIDDEN"
+        hitboxVisibleButton.TextColor3 = hitboxCfg.Visible and accentColor or Color3.fromRGB(143, 151, 163)
+        applyHitboxChanges()
+    end)
+
+    applyHitboxButton.Activated:Connect(applyHitboxChanges)
+
+    resetHitboxButton.Activated:Connect(function()
+        hitboxCfg.X = 2
+        hitboxCfg.Y = 2
+        hitboxCfg.Z = 1
+        hitboxCfg.Transparency = 0.5
+        for key in pairs(hitboxRows) do updateHitboxRow(key) end
+        applyHitboxChanges()
+        hitboxStatus.Text = hitboxStatus.Text .. "  •  DEFAULTS RESTORED"
+    end)
+
     -- Settings
     heading(settingsPage, "Settings", "Preferencias leves para o painel.")
     local settingsCard = uiCard(settingsPage, "SettingsCard", UDim2.fromOffset(22, 78), UDim2.new(1, -44, 0, 168))
@@ -2256,6 +2487,10 @@ local function buildMenu()
         logoText.TextColor3 = accentColor
         for _, item in pairs(navItems) do item.bar.BackgroundColor3 = accentColor end
         for _, row in pairs(spreadRows) do row.fill.BackgroundColor3 = accentColor end
+        for _, row in pairs(hitboxRows) do
+            row.fill.BackgroundColor3 = accentColor
+            row.value.TextColor3 = accentColor
+        end
         for _, card in pairs(featureCards) do card.value.TextColor3 = accentColor end
     end
 
@@ -2433,6 +2668,11 @@ local function buildMenu()
                 + (spreadPatched["[TacticalShotgun]"] or 0)
                 + (spreadPatched["[Revolver]"] or 0)
             spreadInfo.Text = string.format("Matched functions: %d  |  patched constants: %d", spreadCandidatesSeen, patched)
+        elseif selectedTab == "hitbox" then
+            for key in pairs(hitboxRows) do updateHitboxRow(key) end
+            hitboxEnabledButton.Text = hitboxCfg.Enabled and "ON" or "OFF"
+            hitboxVisibleButton.Text = hitboxCfg.Visible and "VISIBLE" or "HIDDEN"
+            refreshHitboxStatus()
         end
     end
 
@@ -2592,7 +2832,7 @@ local function stop()
     restoreSpread()
     if env.DHC_Stop == stop then env.DHC_Stop = nil end
     if env.DHC_Status == status then env.DHC_Status = nil end
-    print("[V4ware V20] Parado; menu fechado e constantes restauradas onde possivel.")
+    print("[V4ware V20.2] Parado; menu fechado e constantes restauradas onde possivel.")
 end
 
 env.DHC_Stop = stop
@@ -2600,8 +2840,8 @@ env.DHC_Status = status
 refreshESP()
 updateHitboxes()
 updateSpread()
-print("[V4ware V20] Iniciado: INSERT menu (Overview / Players / Spread / System / Settings) | Pulo somente COM OS PES APOIADOS; sem buffer, sem voo e sem cooldown artificial")
+print("[V4ware V20.2] Iniciado: INSERT menu (Overview / Players / Spread / Hitbox / System / Settings) | Pulo somente COM OS PES APOIADOS; sem buffer, sem voo e sem cooldown artificial")
 print("[V4ware V20] Trigger: delay cliente 0 | DB 180 | Revolver 260 | Tactical 180 | limite geral 280 studs")
-print("[V4ware V20] Menu: INSERT | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
+print("[V4ware V20.2] Menu: INSERT | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
 warn("[V4ware V20] Experimento de patch de CONSTANTES especificas. Sem hook FireServer; resultado real nao testado.")
 print("[V4ware WS] Weapon Switch ativo: V -> DB / Tactical / Revolver, respeitando cooldowns do jogo")
