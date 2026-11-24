@@ -1600,7 +1600,7 @@ local function uiText(parent, txt, props)
         BackgroundTransparency = 1,
         Font = Enum.Font.Gotham,
         TextSize = 12,
-        TextColor3 = Color3.fromRGB(224, 229, 237),
+        TextColor3 = Color3.fromRGB(229, 237, 247),
         TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Center,
         BorderSizePixel = 0,
@@ -1610,8 +1610,8 @@ local function uiText(parent, txt, props)
     return uiNew("TextLabel", p, parent)
 end
 
--- UI refresh: hover discreto e orientado a eventos, sem UIScale/tweens por controle.
--- As transicoes de pagina e abertura continuam usando playUiTween.
+-- Hover discreto, sem UIScale por controle e sem criar tweens a cada entrada/saida.
+-- A unica animacao mantida e a escala unica do painel ao abrir.
 local PAGE_IN = TweenInfo.new(0.16, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
 
 local function playUiTween(target, info, properties)
@@ -1636,14 +1636,14 @@ local function addHoverMotion(guiObject, options)
     local baseTextColor = guiObject:IsA("TextButton") and guiObject.TextColor3 or nil
     local baseStrokeColor = stroke and stroke.Color or nil
     local baseStrokeThickness = stroke and stroke.Thickness or nil
-    local blend = options.Blend or 0.10
-    local hoverText = baseTextColor and baseTextColor:Lerp(Color3.fromRGB(255, 255, 255), 0.10) or nil
+    local blend = options.Blend or 0.12
+    local hoverTextColor = baseTextColor and baseTextColor:Lerp(Color3.fromRGB(255, 255, 255), 0.10) or nil
 
     guiObject.MouseEnter:Connect(function()
         if baseTransparency < 1 and options.Background ~= false then
             guiObject.BackgroundColor3 = baseBackground:Lerp(accentColor, blend)
         end
-        if hoverText then guiObject.TextColor3 = hoverText end
+        if hoverTextColor then guiObject.TextColor3 = hoverTextColor end
         if stroke then
             stroke.Color = accentColor
             stroke.Thickness = math.max(baseStrokeThickness or 1, 1.2)
@@ -1665,17 +1665,17 @@ end
 local function uiButton(parent, txt, props)
     local p = {
         Text = txt,
-        BackgroundColor3 = Color3.fromRGB(31, 37, 46),
+        BackgroundColor3 = Color3.fromRGB(23, 37, 55),
         BorderSizePixel = 0,
         Font = Enum.Font.GothamMedium,
         TextSize = 11,
-        TextColor3 = Color3.fromRGB(226, 231, 239),
+        TextColor3 = Color3.fromRGB(232, 241, 250),
         AutoButtonColor = false,
     }
     for k, v in pairs(props or {}) do p[k] = v end
     local button = uiNew("TextButton", p, parent)
     uiNew("UICorner", {CornerRadius = UDim.new(0, 8)}, button)
-    uiNew("UIStroke", {Color = Color3.fromRGB(48, 57, 70), Thickness = 1}, button)
+    uiNew("UIStroke", {Color = Color3.fromRGB(43, 64, 87), Thickness = 1}, button)
     addHoverMotion(button, {Scale = 1.035, Blend = 0.18})
     return button
 end
@@ -1685,11 +1685,11 @@ local function uiCard(parent, name, position, size)
         Name = name,
         Position = position,
         Size = size,
-        BackgroundColor3 = Color3.fromRGB(24, 29, 37),
+        BackgroundColor3 = Color3.fromRGB(18, 28, 42),
         BorderSizePixel = 0,
     }, parent)
     uiNew("UICorner", {CornerRadius = UDim.new(0, 10)}, card)
-    uiNew("UIStroke", {Color = Color3.fromRGB(48, 57, 70), Thickness = 1}, card)
+    uiNew("UIStroke", {Color = Color3.fromRGB(35, 51, 70), Thickness = 1}, card)
     return card
 end
 
@@ -1730,6 +1730,7 @@ local function formatDuration(seconds)
 end
 
 local function buildMenu()
+    local accentElements = {}
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 10)
     if not playerGui then
         warn("[V4ware] PlayerGui nao encontrado; menu nao criado")
@@ -1750,45 +1751,46 @@ local function buildMenu()
 
     menuPanel = uiNew("Frame", {
         Name = "Panel",
-        Size = UDim2.fromOffset(740, 500),
+        Size = UDim2.fromOffset(880, 580),
         AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.fromScale(0.5, 0.5),
-        BackgroundColor3 = Color3.fromRGB(14, 17, 22),
+        BackgroundColor3 = Color3.fromRGB(9, 14, 22),
         BorderSizePixel = 0,
         Active = true,
     }, menuGui)
     panelScale = uiNew("UIScale", {Scale = 1}, menuPanel)
     uiNew("UICorner", {CornerRadius = UDim.new(0, 14)}, menuPanel)
-    uiNew("UIStroke", {Color = Color3.fromRGB(43, 49, 59), Thickness = 1}, menuPanel)
+    uiNew("UIStroke", {Color = Color3.fromRGB(38, 58, 81), Thickness = 1}, menuPanel)
     uiNew("UISizeConstraint", {
-        MinSize = Vector2.new(620, 66),
-        MaxSize = Vector2.new(900, 620),
+        MinSize = Vector2.new(660, 74),
+        MaxSize = Vector2.new(920, 680),
     }, menuPanel)
 
     -- Header
     local header = uiNew("Frame", {
         Name = "Header",
-        Size = UDim2.new(1, 0, 0, 66),
-        BackgroundColor3 = Color3.fromRGB(18, 22, 29),
+        Size = UDim2.new(1, 0, 0, 74),
+        BackgroundColor3 = Color3.fromRGB(13, 20, 31),
         BorderSizePixel = 0,
     }, menuPanel)
     uiNew("UICorner", {CornerRadius = UDim.new(0, 14)}, header)
     uiNew("Frame", {
-        Position = UDim2.new(0, 0, 1, -13),
-        Size = UDim2.new(1, 0, 0, 13),
-        BackgroundColor3 = Color3.fromRGB(18, 22, 29),
+        Position = UDim2.new(0, 0, 1, -14),
+        Size = UDim2.new(1, 0, 0, 14),
+        BackgroundColor3 = Color3.fromRGB(13, 20, 31),
         BorderSizePixel = 0,
     }, header)
 
-    local headerAccentLine = uiNew("Frame", {
+    local headerAccentDivider = uiNew("Frame", {
         Name = "AccentDivider",
-        Position = UDim2.new(0, 18, 1, -1),
-        Size = UDim2.new(1, -36, 0, 1),
+        Position = UDim2.new(0, 20, 1, -1),
+        Size = UDim2.new(1, -40, 0, 1),
         BackgroundColor3 = accentColor,
-        BackgroundTransparency = 0.28,
+        BackgroundTransparency = 0.24,
         BorderSizePixel = 0,
     }, header)
-    local logo = uiCard(header, "LogoMark", UDim2.fromOffset(18, 14), UDim2.fromOffset(38, 38))
+    table.insert(accentElements, headerAccentDivider)
+    local logo = uiCard(header, "LogoMark", UDim2.fromOffset(20, 16), UDim2.fromOffset(42, 42))
     local logoText = uiText(logo, "V4", {
         Size = UDim2.fromScale(1, 1),
         TextXAlignment = Enum.TextXAlignment.Center,
@@ -1797,36 +1799,36 @@ local function buildMenu()
         TextColor3 = accentColor,
     })
     uiText(header, "V4ware", {
-        Position = UDim2.fromOffset(66, 12),
-        Size = UDim2.fromOffset(170, 24),
+        Position = UDim2.fromOffset(74, 12),
+        Size = UDim2.fromOffset(190, 27),
         Font = Enum.Font.GothamSemibold,
-        TextSize = 18,
-        TextColor3 = Color3.fromRGB(241, 244, 249),
+        TextSize = 19,
+        TextColor3 = Color3.fromRGB(244, 248, 255),
     })
     uiText(header, "CLEAN CONTROL CENTER  •  V20.5", {
-        Position = UDim2.fromOffset(67, 35),
-        Size = UDim2.fromOffset(240, 14),
+        Position = UDim2.fromOffset(75, 40),
+        Size = UDim2.fromOffset(270, 15),
         Font = Enum.Font.GothamMedium,
         TextSize = 8,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
+        TextColor3 = Color3.fromRGB(143, 160, 180),
     })
 
     local onlinePill = uiNew("Frame", {
-        Position = UDim2.new(1, -142, 0, 21),
-        Size = UDim2.fromOffset(74, 24),
+        Position = UDim2.new(1, -174, 0, 24),
+        Size = UDim2.fromOffset(84, 26),
         BackgroundColor3 = Color3.fromRGB(24, 43, 36),
         BorderSizePixel = 0,
     }, header)
     uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, onlinePill)
     local dot = uiNew("Frame", {
-        Position = UDim2.fromOffset(9, 8),
+        Position = UDim2.fromOffset(10, 9),
         Size = UDim2.fromOffset(7, 7),
         BackgroundColor3 = Color3.fromRGB(111, 207, 151),
         BorderSizePixel = 0,
     }, onlinePill)
     uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, dot)
     uiText(onlinePill, "ONLINE", {
-        Position = UDim2.fromOffset(22, 0),
+        Position = UDim2.fromOffset(25, 0),
         Size = UDim2.new(1, -24, 1, 0),
         Font = Enum.Font.GothamBold,
         TextSize = 9,
@@ -1834,75 +1836,75 @@ local function buildMenu()
     })
 
     local minimize = uiButton(header, "–", {
-        Position = UDim2.new(1, -61, 0, 19),
-        Size = UDim2.fromOffset(27, 27),
+        Position = UDim2.new(1, -66, 0, 23),
+        Size = UDim2.fromOffset(29, 29),
         TextSize = 16,
     })
     local close = uiButton(header, "×", {
-        Position = UDim2.new(1, -29, 0, 19),
-        Size = UDim2.fromOffset(27, 27),
+        Position = UDim2.new(1, -33, 0, 23),
+        Size = UDim2.fromOffset(29, 29),
         TextSize = 17,
     })
 
     -- Sidebar
     local body = uiNew("Frame", {
         Name = "Body",
-        Position = UDim2.fromOffset(0, 66),
-        Size = UDim2.new(1, 0, 1, -66),
+        Position = UDim2.fromOffset(0, 74),
+        Size = UDim2.new(1, 0, 1, -74),
         BackgroundTransparency = 1,
     }, menuPanel)
 
     local sidebar = uiNew("Frame", {
         Name = "Sidebar",
-        Size = UDim2.new(0, 158, 1, 0),
-        BackgroundColor3 = Color3.fromRGB(18, 22, 29),
+        Size = UDim2.new(0, 176, 1, 0),
+        BackgroundColor3 = Color3.fromRGB(13, 20, 31),
         BorderSizePixel = 0,
     }, body)
     uiNew("Frame", {
         Position = UDim2.new(1, -1, 0, 0),
         Size = UDim2.new(0, 1, 1, 0),
-        BackgroundColor3 = Color3.fromRGB(43, 49, 59),
+        BackgroundColor3 = Color3.fromRGB(38, 58, 81),
         BorderSizePixel = 0,
     }, sidebar)
-    uiText(sidebar, "WORKSPACE", {
-        Position = UDim2.fromOffset(16, 17),
-        Size = UDim2.new(1, -30, 0, 16),
+    uiText(sidebar, "NAVIGATION", {
+        Position = UDim2.fromOffset(18, 19),
+        Size = UDim2.new(1, -34, 0, 16),
         Font = Enum.Font.GothamBold,
         TextSize = 9,
-        TextColor3 = Color3.fromRGB(101, 112, 127),
+        TextColor3 = Color3.fromRGB(113, 132, 154),
     })
 
     local nav = uiNew("Frame", {
         Name = "Navigation",
-        Position = UDim2.fromOffset(9, 45),
-        Size = UDim2.new(1, -18, 0, 300),
+        Position = UDim2.fromOffset(10, 49),
+        Size = UDim2.new(1, -20, 0, 310),
         BackgroundTransparency = 1,
     }, sidebar)
     uiNew("UIListLayout", {
-        Padding = UDim.new(0, 6),
+        Padding = UDim.new(0, 7),
         SortOrder = Enum.SortOrder.LayoutOrder,
     }, nav)
 
-    local footer = uiCard(sidebar, "BuildInfo", UDim2.new(0, 10, 1, -53), UDim2.new(1, -20, 0, 39))
+    local footer = uiCard(sidebar, "BuildInfo", UDim2.new(0, 10, 1, -58), UDim2.new(1, -20, 0, 46))
     uiText(footer, "BUILD", {
-        Position = UDim2.fromOffset(9, 3),
-        Size = UDim2.new(1, -18, 0, 12),
+        Position = UDim2.fromOffset(10, 5),
+        Size = UDim2.new(1, -20, 0, 12),
         Font = Enum.Font.GothamBold,
         TextSize = 8,
-        TextColor3 = Color3.fromRGB(101, 112, 127),
+        TextColor3 = Color3.fromRGB(113, 132, 154),
     })
     uiText(footer, "V20.5  •  PREMIUM", {
-        Position = UDim2.fromOffset(9, 17),
-        Size = UDim2.new(1, -18, 0, 15),
+        Position = UDim2.fromOffset(10, 22),
+        Size = UDim2.new(1, -20, 0, 16),
         Font = Enum.Font.GothamMedium,
         TextSize = 9,
-        TextColor3 = Color3.fromRGB(177, 187, 200),
+        TextColor3 = Color3.fromRGB(186, 202, 220),
     })
 
     local content = uiNew("Frame", {
         Name = "Content",
-        Position = UDim2.fromOffset(158, 0),
-        Size = UDim2.new(1, -158, 1, 0),
+        Position = UDim2.fromOffset(176, 0),
+        Size = UDim2.new(1, -176, 1, 0),
         BackgroundTransparency = 1,
     }, body)
 
@@ -1928,27 +1930,34 @@ local function buildMenu()
     local settingsPage = makePage("Settings")
 
     local function heading(parent, title, subtitle)
+        local headingMarker = uiNew("Frame", {
+            Position = UDim2.fromOffset(22, 19),
+            Size = UDim2.fromOffset(3, 24),
+            BackgroundColor3 = accentColor,
+            BorderSizePixel = 0,
+        }, parent)
+        table.insert(accentElements, headingMarker)
         uiText(parent, title, {
-            Position = UDim2.fromOffset(22, 15),
-            Size = UDim2.new(1, -44, 0, 27),
+            Position = UDim2.fromOffset(34, 14),
+            Size = UDim2.new(1, -58, 0, 29),
             Font = Enum.Font.GothamSemibold,
-            TextSize = 19,
-            TextColor3 = Color3.fromRGB(241, 244, 249),
+            TextSize = 20,
+            TextColor3 = Color3.fromRGB(244, 248, 255),
         })
         uiText(parent, subtitle, {
-            Position = UDim2.fromOffset(23, 43),
-            Size = UDim2.new(1, -46, 0, 17),
+            Position = UDim2.fromOffset(35, 45),
+            Size = UDim2.new(1, -60, 0, 17),
             Font = Enum.Font.Gotham,
             TextSize = 10,
-            TextColor3 = Color3.fromRGB(133, 143, 157),
+            TextColor3 = Color3.fromRGB(143, 160, 180),
         })
     end
 
     local function navItem(name, subtitle, glyph, order)
         local b = uiNew("TextButton", {
             Name = name .. "Nav",
-            Size = UDim2.new(1, 0, 0, 43),
-            BackgroundColor3 = Color3.fromRGB(18, 22, 29),
+            Size = UDim2.new(1, 0, 0, 44),
+            BackgroundColor3 = Color3.fromRGB(13, 20, 31),
             BackgroundTransparency = 1,
             BorderSizePixel = 0,
             Text = "",
@@ -1958,33 +1967,33 @@ local function buildMenu()
         uiNew("UICorner", {CornerRadius = UDim.new(0, 8)}, b)
         local bar = uiNew("Frame", {
             Position = UDim2.fromOffset(0, 9),
-            Size = UDim2.fromOffset(3, 25),
+            Size = UDim2.fromOffset(3, 26),
             BackgroundColor3 = accentColor,
             BorderSizePixel = 0,
             Visible = false,
         }, b)
         uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, bar)
         local icon = uiText(b, glyph, {
-            Position = UDim2.fromOffset(10, 0),
-            Size = UDim2.fromOffset(22, 42),
+            Position = UDim2.fromOffset(11, 1),
+            Size = UDim2.fromOffset(24, 42),
             TextXAlignment = Enum.TextXAlignment.Center,
             Font = Enum.Font.GothamSemibold,
             TextSize = 13,
-            TextColor3 = Color3.fromRGB(135, 146, 161),
+            TextColor3 = Color3.fromRGB(148, 166, 188),
         })
         local title = uiText(b, name, {
-            Position = UDim2.fromOffset(39, 5),
-            Size = UDim2.new(1, -46, 0, 17),
+            Position = UDim2.fromOffset(43, 5),
+            Size = UDim2.new(1, -50, 0, 18),
             Font = Enum.Font.GothamSemibold,
             TextSize = 11,
-            TextColor3 = Color3.fromRGB(135, 146, 161),
+            TextColor3 = Color3.fromRGB(148, 166, 188),
         })
         uiText(b, subtitle, {
-            Position = UDim2.fromOffset(39, 22),
-            Size = UDim2.new(1, -46, 0, 13),
+            Position = UDim2.fromOffset(43, 24),
+            Size = UDim2.new(1, -50, 0, 13),
             Font = Enum.Font.Gotham,
             TextSize = 8,
-            TextColor3 = Color3.fromRGB(97, 108, 123),
+            TextColor3 = Color3.fromRGB(104, 122, 144),
         })
         local navStroke = uiNew("UIStroke", {
             Color = accentColor,
@@ -1998,21 +2007,21 @@ local function buildMenu()
         navItems[name] = navState
 
         b.MouseEnter:Connect(function()
-            navStroke.Transparency = 0.55
+            navStroke.Transparency = 0.62
             navStroke.Color = accentColor
             if not navState.active then
-                b.BackgroundTransparency = 0.42
-                b.BackgroundColor3 = Color3.fromRGB(29, 36, 46)
-                title.TextColor3 = Color3.fromRGB(226, 232, 241)
+                b.BackgroundTransparency = 0.35
+                b.BackgroundColor3 = Color3.fromRGB(24, 40, 60)
+                title.TextColor3 = Color3.fromRGB(225, 235, 247)
                 icon.TextColor3 = accentColor
             end
         end)
         b.MouseLeave:Connect(function()
-            navStroke.Transparency = navState.active and 0.72 or 1
+            navStroke.Transparency = navState.active and 0.68 or 1
             if not navState.active then
                 b.BackgroundTransparency = 1
-                title.TextColor3 = Color3.fromRGB(135, 146, 161)
-                icon.TextColor3 = Color3.fromRGB(135, 146, 161)
+                title.TextColor3 = Color3.fromRGB(148, 166, 188)
+                icon.TextColor3 = Color3.fromRGB(148, 166, 188)
             end
         end)
         return b
@@ -2026,20 +2035,20 @@ local function buildMenu()
     navItem("Settings", "Preferences", "⚙", 6)
 
     local function metricCard(parent, key, title, x, y, width)
-        local card = uiCard(parent, key, UDim2.fromOffset(x, y), UDim2.fromOffset(width, 82))
+        local card = uiCard(parent, key, UDim2.fromOffset(x, y), UDim2.fromOffset(width, 88))
         uiText(card, title:upper(), {
-            Position = UDim2.fromOffset(12, 9),
-            Size = UDim2.new(1, -24, 0, 14),
+            Position = UDim2.fromOffset(15, 12),
+            Size = UDim2.new(1, -30, 0, 14),
             Font = Enum.Font.GothamBold,
             TextSize = 8,
-            TextColor3 = Color3.fromRGB(132, 143, 158),
+            TextColor3 = Color3.fromRGB(145, 164, 186),
         })
         monitorValues[key] = uiText(card, "--", {
-            Position = UDim2.fromOffset(12, 30),
-            Size = UDim2.new(1, -24, 0, 30),
+            Position = UDim2.fromOffset(15, 35),
+            Size = UDim2.new(1, -30, 0, 32),
             Font = Enum.Font.GothamSemibold,
             TextSize = 21,
-            TextColor3 = Color3.fromRGB(241, 244, 249),
+            TextColor3 = Color3.fromRGB(244, 248, 255),
         })
     end
 
@@ -2047,62 +2056,62 @@ local function buildMenu()
     heading(overviewPage, "Overview", "Status geral da V4ware e da sessao atual.")
     local featureCards = {}
     local function featureCard(key, title, x, y)
-        local card = uiCard(overviewPage, key, UDim2.fromOffset(x, y), UDim2.fromOffset(226, 63))
+        local card = uiCard(overviewPage, key, UDim2.fromOffset(x, y), UDim2.fromOffset(294, 62))
         local dotFeature = uiNew("Frame", {
-            Position = UDim2.fromOffset(13, 25),
+            Position = UDim2.fromOffset(15, 27),
             Size = UDim2.fromOffset(7, 7),
             BackgroundColor3 = Color3.fromRGB(105, 113, 124),
             BorderSizePixel = 0,
         }, card)
         uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, dotFeature)
         uiText(card, title, {
-            Position = UDim2.fromOffset(29, 10),
-            Size = UDim2.new(1, -95, 0, 18),
+            Position = UDim2.fromOffset(34, 9),
+            Size = UDim2.new(1, -112, 0, 20),
             Font = Enum.Font.GothamMedium,
             TextSize = 10,
-            TextColor3 = Color3.fromRGB(220, 226, 235),
+            TextColor3 = Color3.fromRGB(225, 235, 247),
         })
         local value = uiText(card, "OFF", {
-            Position = UDim2.new(1, -67, 0, 10),
-            Size = UDim2.fromOffset(54, 18),
+            Position = UDim2.new(1, -78, 0, 9),
+            Size = UDim2.fromOffset(62, 20),
             Font = Enum.Font.GothamBold,
             TextSize = 9,
             TextXAlignment = Enum.TextXAlignment.Right,
-            TextColor3 = Color3.fromRGB(132, 143, 158),
+            TextColor3 = Color3.fromRGB(145, 164, 186),
         })
         featureCards[key] = {value = value, dot = dotFeature}
     end
 
-    featureCard("Triggerbot", "Triggerbot", 22, 70)
-    featureCard("InfiniteJump", "Infinite Jump", 264, 70)
-    featureCard("ESP", "ESP", 22, 140)
-    featureCard("Camlock", "Camlock", 264, 140)
-    featureCard("Hitbox", "Hitbox Expander", 22, 210)
-    featureCard("Spread", "Spread Modification", 264, 210)
+    featureCard("Triggerbot", "Triggerbot", 22, 82)
+    featureCard("InfiniteJump", "Infinite Jump", 326, 82)
+    featureCard("ESP", "ESP", 22, 154)
+    featureCard("Camlock", "Camlock", 326, 154)
+    featureCard("Hitbox", "Hitbox Expander", 22, 226)
+    featureCard("Spread", "Spread Modification", 326, 226)
 
-    featureCard("WeaponSwitch", "Weapon Switch", 22, 280)
+    featureCard("WeaponSwitch", "Weapon Switch", 22, 298)
 
-    local overviewBottom = uiCard(overviewPage, "OverviewSession", UDim2.fromOffset(22, 354), UDim2.new(1, -44, 0, 66))
+    local overviewBottom = uiCard(overviewPage, "OverviewSession", UDim2.fromOffset(22, 378), UDim2.new(1, -44, 0, 82))
     uiText(overviewBottom, "SESSION", {
-        Position = UDim2.fromOffset(13, 8),
-        Size = UDim2.new(1, -26, 0, 13),
+        Position = UDim2.fromOffset(15, 10),
+        Size = UDim2.new(1, -30, 0, 13),
         Font = Enum.Font.GothamBold,
         TextSize = 8,
-        TextColor3 = Color3.fromRGB(132, 143, 158),
+        TextColor3 = Color3.fromRGB(145, 164, 186),
     })
     local overviewSession = uiText(overviewBottom, "ONLINE  •  INSERT TO OPEN / CLOSE", {
-        Position = UDim2.fromOffset(13, 27),
-        Size = UDim2.new(1, -26, 0, 17),
+        Position = UDim2.fromOffset(15, 30),
+        Size = UDim2.new(1, -30, 0, 18),
         Font = Enum.Font.GothamSemibold,
         TextSize = 10,
         TextColor3 = Color3.fromRGB(231, 236, 244),
     })
     local overviewUptime = uiText(overviewBottom, "Session 00:00:00", {
-        Position = UDim2.fromOffset(13, 45),
-        Size = UDim2.new(1, -26, 0, 13),
+        Position = UDim2.fromOffset(15, 54),
+        Size = UDim2.new(1, -30, 0, 14),
         Font = Enum.Font.Gotham,
         TextSize = 9,
-        TextColor3 = Color3.fromRGB(132, 143, 158),
+        TextColor3 = Color3.fromRGB(145, 164, 186),
     })
 
     local function setFeature(key, enabled, active)
@@ -2110,7 +2119,7 @@ local function buildMenu()
         if not item then return end
         local on = enabled == true
         item.value.Text = not on and "OFF" or (active == false and "READY" or "ON")
-        item.value.TextColor3 = on and accentColor or Color3.fromRGB(132, 143, 158)
+        item.value.TextColor3 = on and accentColor or Color3.fromRGB(145, 164, 186)
         item.dot.BackgroundColor3 = on and Color3.fromRGB(111, 207, 151) or Color3.fromRGB(83, 91, 103)
     end
 
@@ -2128,22 +2137,22 @@ local function buildMenu()
     -- Players
     heading(playersPage, "Players", "Gerencie as listas e visualize a sessao.")
     tabWhitelist = uiButton(playersPage, "WHITELIST", {
-        Position = UDim2.fromOffset(22, 73),
-        Size = UDim2.fromOffset(112, 29),
-        BackgroundColor3 = Color3.fromRGB(39, 49, 62),
+        Position = UDim2.fromOffset(22, 82),
+        Size = UDim2.fromOffset(132, 32),
+        BackgroundColor3 = Color3.fromRGB(30, 49, 73),
     })
     tabIncognito = uiButton(playersPage, "INCOGNITO", {
-        Position = UDim2.fromOffset(142, 73),
-        Size = UDim2.fromOffset(112, 29),
+        Position = UDim2.fromOffset(164, 82),
+        Size = UDim2.fromOffset(132, 32),
     })
     menuPlayers = uiNew("ScrollingFrame", {
         Name = "PlayerList",
-        Position = UDim2.fromOffset(22, 112),
-        Size = UDim2.new(1, -44, 1, -151),
+        Position = UDim2.fromOffset(22, 126),
+        Size = UDim2.new(1, -44, 1, -166),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
         ScrollBarThickness = 3,
-        ScrollBarImageColor3 = Color3.fromRGB(88, 97, 110),
+        ScrollBarImageColor3 = Color3.fromRGB(89, 119, 151),
         AutomaticCanvasSize = Enum.AutomaticSize.Y,
         CanvasSize = UDim2.fromOffset(0, 0),
     }, playersPage)
@@ -2152,46 +2161,46 @@ local function buildMenu()
         Padding = UDim.new(0, 5),
     }, menuPlayers)
     menuCount = uiText(playersPage, "WHITELIST  •  0 entries", {
-        Position = UDim2.new(0, 23, 1, -29),
-        Size = UDim2.new(1, -46, 0, 17),
+        Position = UDim2.new(0, 23, 1, -30),
+        Size = UDim2.new(1, -46, 0, 18),
         Font = Enum.Font.GothamMedium,
         TextSize = 9,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
+        TextColor3 = Color3.fromRGB(143, 160, 180),
     })
 
     -- System
     heading(systemPage, "System monitor", "Telemetria local com atualizacao em baixa frequencia.")
     monitorFrame = uiNew("Frame", {
         Name = "SystemMonitor",
-        Position = UDim2.fromOffset(22, 76),
-        Size = UDim2.new(1, -44, 1, -98),
+        Position = UDim2.fromOffset(22, 82),
+        Size = UDim2.new(1, -44, 1, -104),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
     }, systemPage)
-    metricCard(monitorFrame, "FPS", "Frame rate", 0, 0, 226)
-    metricCard(monitorFrame, "Ping", "Network ping", 242, 0, 226)
-    metricCard(monitorFrame, "Memory", "Client memory", 0, 96, 226)
-    metricCard(monitorFrame, "Players", "Players in session", 242, 96, 226)
-    local systemSession = uiCard(monitorFrame, "SystemSession", UDim2.fromOffset(0, 192), UDim2.new(1, 0, 0, 65))
+    metricCard(monitorFrame, "FPS", "Frame rate", 0, 0, 280)
+    metricCard(monitorFrame, "Ping", "Network ping", 300, 0, 280)
+    metricCard(monitorFrame, "Memory", "Client memory", 0, 104, 280)
+    metricCard(monitorFrame, "Players", "Players in session", 300, 104, 280)
+    local systemSession = uiCard(monitorFrame, "SystemSession", UDim2.fromOffset(0, 208), UDim2.new(1, 0, 0, 82))
     uiText(systemSession, "SESSION STATUS", {
-        Position = UDim2.fromOffset(13, 8),
-        Size = UDim2.new(1, -26, 0, 13),
+        Position = UDim2.fromOffset(15, 10),
+        Size = UDim2.new(1, -30, 0, 13),
         Font = Enum.Font.GothamBold,
         TextSize = 8,
-        TextColor3 = Color3.fromRGB(132, 143, 158),
+        TextColor3 = Color3.fromRGB(145, 164, 186),
     })
     monitorValues.Status = uiText(systemSession, "ONLINE  •  CLIENT MONITOR ACTIVE", {
-        Position = UDim2.fromOffset(13, 25),
-        Size = UDim2.new(1, -26, 0, 16),
+        Position = UDim2.fromOffset(15, 31),
+        Size = UDim2.new(1, -30, 0, 17),
         Font = Enum.Font.GothamSemibold,
         TextSize = 10,
     })
     monitorValues.Uptime = uiText(systemSession, "Session 00:00:00", {
-        Position = UDim2.fromOffset(13, 44),
-        Size = UDim2.new(1, -26, 0, 13),
+        Position = UDim2.fromOffset(15, 55),
+        Size = UDim2.new(1, -30, 0, 14),
         Font = Enum.Font.Gotham,
         TextSize = 9,
-        TextColor3 = Color3.fromRGB(132, 143, 158),
+        TextColor3 = Color3.fromRGB(145, 164, 186),
     })
 
     updateSystemMonitor = function()
@@ -2215,11 +2224,11 @@ local function buildMenu()
     }
     heading(spreadPage, "Spread settings", "Multipliers: 1.00 = original value  •  0.00 = zero multiplier")
     local spreadStatus = uiText(spreadPage, "EDIT VALUES, THEN APPLY CHANGES", {
-        Position = UDim2.fromOffset(23, 62),
-        Size = UDim2.new(1, -46, 0, 14),
+        Position = UDim2.fromOffset(24, 67),
+        Size = UDim2.new(1, -48, 0, 16),
         Font = Enum.Font.GothamMedium,
         TextSize = 8,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
+        TextColor3 = Color3.fromRGB(143, 160, 180),
     })
     local function spreadValue(key)
         if type(Config.SpreadModification) ~= "table" then
@@ -2242,17 +2251,17 @@ local function buildMenu()
     for index, item in ipairs(spreadNames) do
         local weaponKey = item.key
         local weaponTitle = item.title
-        local y = 82 + (index - 1) * 82
-        local card = uiCard(spreadPage, "Spread_" .. tostring(index), UDim2.fromOffset(22, y), UDim2.new(1, -44, 0, 70))
+        local y = 92 + (index - 1) * 96
+        local card = uiCard(spreadPage, "Spread_" .. tostring(index), UDim2.fromOffset(22, y), UDim2.new(1, -44, 0, 80))
         uiText(card, weaponTitle, {
-            Position = UDim2.fromOffset(13, 8),
-            Size = UDim2.new(1, -160, 0, 17),
+            Position = UDim2.fromOffset(15, 11),
+            Size = UDim2.new(1, -170, 0, 19),
             Font = Enum.Font.GothamSemibold,
             TextSize = 11,
         })
         local value = uiNew("TextBox", {
-            Position = UDim2.new(1, -125, 0, 7),
-            Size = UDim2.fromOffset(50, 18),
+            Position = UDim2.new(1, -132, 0, 10),
+            Size = UDim2.fromOffset(54, 20),
             BackgroundTransparency = 1,
             Text = "1.00",
             ClearTextOnFocus = false,
@@ -2263,19 +2272,19 @@ local function buildMenu()
             BorderSizePixel = 0,
         }, card)
         local minus = uiButton(card, "−", {
-            Position = UDim2.new(1, -66, 0, 7),
-            Size = UDim2.fromOffset(25, 23),
+            Position = UDim2.new(1, -72, 0, 8),
+            Size = UDim2.fromOffset(27, 27),
             TextSize = 14,
         })
         local plus = uiButton(card, "+", {
-            Position = UDim2.new(1, -35, 0, 7),
-            Size = UDim2.fromOffset(25, 23),
+            Position = UDim2.new(1, -39, 0, 8),
+            Size = UDim2.fromOffset(27, 27),
             TextSize = 13,
         })
         local track = uiNew("Frame", {
-            Position = UDim2.fromOffset(13, 43),
-            Size = UDim2.new(1, -26, 0, 7),
-            BackgroundColor3 = Color3.fromRGB(48, 57, 70),
+            Position = UDim2.fromOffset(15, 53),
+            Size = UDim2.new(1, -30, 0, 8),
+            BackgroundColor3 = Color3.fromRGB(35, 51, 70),
             BorderSizePixel = 0,
         }, card)
         uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, track)
@@ -2309,21 +2318,21 @@ local function buildMenu()
     end
 
     local applySpreadButton = uiButton(spreadPage, "APPLY CHANGES", {
-        Position = UDim2.fromOffset(22, 334),
-        Size = UDim2.fromOffset(132, 31),
+        Position = UDim2.fromOffset(22, 388),
+        Size = UDim2.fromOffset(142, 34),
         BackgroundColor3 = Color3.fromRGB(38, 49, 62),
         TextColor3 = Color3.fromRGB(228, 237, 248),
     })
     local resetSpreadButton = uiButton(spreadPage, "RESET DEFAULTS", {
-        Position = UDim2.fromOffset(162, 334),
-        Size = UDim2.fromOffset(124, 31),
+        Position = UDim2.fromOffset(174, 388),
+        Size = UDim2.fromOffset(134, 34),
     })
     local spreadInfo = uiText(spreadPage, "Patch status: waiting for scan.", {
-        Position = UDim2.fromOffset(23, 372),
-        Size = UDim2.new(1, -46, 0, 34),
+        Position = UDim2.fromOffset(24, 424),
+        Size = UDim2.new(1, -48, 0, 44),
         Font = Enum.Font.Gotham,
         TextSize = 9,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
+        TextColor3 = Color3.fromRGB(143, 160, 180),
         TextWrapped = true,
     })
 
@@ -2371,32 +2380,32 @@ local function buildMenu()
     local hitboxStatus
     heading(hitboxPage, "Hitbox settings", "Dimensions in studs  •  Transparency: 0 = opaque / 1 = invisible.")
 
-    local hitboxTop = uiCard(hitboxPage, "HitboxModuleCard", UDim2.fromOffset(22, 72), UDim2.new(1, -44, 0, 58))
+    local hitboxTop = uiCard(hitboxPage, "HitboxModuleCard", UDim2.fromOffset(22, 82), UDim2.new(1, -44, 0, 72))
     uiText(hitboxTop, "HITBOX EXPANDER", {
-        Position = UDim2.fromOffset(13, 7),
-        Size = UDim2.fromOffset(145, 16),
+        Position = UDim2.fromOffset(15, 10),
+        Size = UDim2.fromOffset(160, 18),
         Font = Enum.Font.GothamSemibold,
         TextSize = 10,
     })
     uiText(hitboxTop, "Enable module and choose whether the resized part is visible.", {
-        Position = UDim2.fromOffset(13, 27),
-        Size = UDim2.new(1, -260, 0, 15),
+        Position = UDim2.fromOffset(15, 34),
+        Size = UDim2.new(1, -270, 0, 17),
         Font = Enum.Font.Gotham,
         TextSize = 8,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
+        TextColor3 = Color3.fromRGB(143, 160, 180),
     })
 
     local hitboxEnabledButton = uiButton(hitboxTop, hitboxCfg.Enabled and "ON" or "OFF", {
-        Position = UDim2.new(1, -178, 0, 14),
-        Size = UDim2.fromOffset(70, 30),
+        Position = UDim2.new(1, -194, 0, 20),
+        Size = UDim2.fromOffset(82, 32),
         TextSize = 9,
-        TextColor3 = hitboxCfg.Enabled and Color3.fromRGB(111, 207, 151) or Color3.fromRGB(143, 151, 163),
+        TextColor3 = hitboxCfg.Enabled and Color3.fromRGB(111, 207, 151) or Color3.fromRGB(154, 171, 192),
     })
     local hitboxVisibleButton = uiButton(hitboxTop, hitboxCfg.Visible and "VISIBLE" or "HIDDEN", {
-        Position = UDim2.new(1, -96, 0, 14),
-        Size = UDim2.fromOffset(82, 30),
+        Position = UDim2.new(1, -104, 0, 20),
+        Size = UDim2.fromOffset(90, 32),
         TextSize = 8,
-        TextColor3 = hitboxCfg.Visible and accentColor or Color3.fromRGB(143, 151, 163),
+        TextColor3 = hitboxCfg.Visible and accentColor or Color3.fromRGB(154, 171, 192),
     })
 
     local function hitboxValue(key, fallback, minimum, maximum)
@@ -2423,16 +2432,16 @@ local function buildMenu()
     end
 
     local function makeHitboxValueCard(key, title, x, y, minimum, maximum, step, fallback)
-        local card = uiCard(hitboxPage, "Hitbox_" .. key, UDim2.fromOffset(x, y), UDim2.fromOffset(260, 70))
+        local card = uiCard(hitboxPage, "Hitbox_" .. key, UDim2.fromOffset(x, y), UDim2.fromOffset(292, 84))
         uiText(card, title, {
-            Position = UDim2.fromOffset(13, 8),
-            Size = UDim2.new(1, -160, 0, 17),
+            Position = UDim2.fromOffset(15, 11),
+            Size = UDim2.new(1, -164, 0, 19),
             Font = Enum.Font.GothamSemibold,
             TextSize = 10,
         })
         local value = uiNew("TextBox", {
-            Position = UDim2.new(1, -125, 0, 7),
-            Size = UDim2.fromOffset(50, 18),
+            Position = UDim2.new(1, -130, 0, 10),
+            Size = UDim2.fromOffset(52, 20),
             BackgroundTransparency = 1,
             Text = string.format("%.2f", hitboxValue(key, fallback, minimum, maximum)),
             ClearTextOnFocus = false,
@@ -2443,19 +2452,19 @@ local function buildMenu()
             BorderSizePixel = 0,
         }, card)
         local minus = uiButton(card, "−", {
-            Position = UDim2.new(1, -66, 0, 7),
-            Size = UDim2.fromOffset(25, 23),
+            Position = UDim2.new(1, -72, 0, 8),
+            Size = UDim2.fromOffset(27, 27),
             TextSize = 14,
         })
         local plus = uiButton(card, "+", {
-            Position = UDim2.new(1, -35, 0, 7),
-            Size = UDim2.fromOffset(25, 23),
+            Position = UDim2.new(1, -40, 0, 8),
+            Size = UDim2.fromOffset(27, 27),
             TextSize = 13,
         })
         local track = uiNew("Frame", {
-            Position = UDim2.fromOffset(13, 43),
-            Size = UDim2.new(1, -26, 0, 7),
-            BackgroundColor3 = Color3.fromRGB(48, 57, 70),
+            Position = UDim2.fromOffset(15, 57),
+            Size = UDim2.new(1, -30, 0, 8),
+            BackgroundColor3 = Color3.fromRGB(35, 51, 70),
             BorderSizePixel = 0,
         }, card)
         uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, track)
@@ -2489,27 +2498,27 @@ local function buildMenu()
         updateHitboxRow(key)
     end
 
-    makeHitboxValueCard("X", "Size X (studs)", 22, 144, 1, 50, 0.5, 2)
-    makeHitboxValueCard("Y", "Size Y (studs)", 300, 144, 1, 50, 0.5, 2)
-    makeHitboxValueCard("Z", "Size Z (studs)", 22, 226, 1, 50, 0.5, 1)
-    makeHitboxValueCard("Transparency", "Transparency", 300, 226, 0, 1, 0.05, 0.5)
+    makeHitboxValueCard("X", "Size X (studs)", 22, 174, 1, 50, 0.5, 2)
+    makeHitboxValueCard("Y", "Size Y (studs)", 326, 174, 1, 50, 0.5, 2)
+    makeHitboxValueCard("Z", "Size Z (studs)", 22, 274, 1, 50, 0.5, 1)
+    makeHitboxValueCard("Transparency", "Transparency", 326, 274, 0, 1, 0.05, 0.5)
 
     local applyHitboxButton = uiButton(hitboxPage, "APPLY CHANGES", {
-        Position = UDim2.fromOffset(22, 310),
-        Size = UDim2.fromOffset(132, 31),
+        Position = UDim2.fromOffset(22, 380),
+        Size = UDim2.fromOffset(142, 34),
         BackgroundColor3 = Color3.fromRGB(38, 49, 62),
         TextColor3 = Color3.fromRGB(228, 237, 248),
     })
     local resetHitboxButton = uiButton(hitboxPage, "RESET DEFAULTS", {
-        Position = UDim2.fromOffset(162, 310),
-        Size = UDim2.fromOffset(124, 31),
+        Position = UDim2.fromOffset(174, 380),
+        Size = UDim2.fromOffset(134, 34),
     })
     hitboxStatus = uiText(hitboxPage, "Module status: waiting for settings.", {
-        Position = UDim2.fromOffset(23, 350),
-        Size = UDim2.new(1, -46, 0, 38),
+        Position = UDim2.fromOffset(24, 420),
+        Size = UDim2.new(1, -48, 0, 50),
         Font = Enum.Font.Gotham,
         TextSize = 9,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
+        TextColor3 = Color3.fromRGB(143, 160, 180),
         TextWrapped = true,
     })
 
@@ -2526,7 +2535,7 @@ local function buildMenu()
             math.max(0.05, tonumber(hitboxCfg.RefreshTime) or 1)
         )
         hitboxStatus.TextColor3 = hitboxCfg.Enabled and Color3.fromRGB(111, 207, 151)
-            or Color3.fromRGB(133, 143, 157)
+            or Color3.fromRGB(143, 160, 180)
     end
 
     local function applyHitboxChanges()
@@ -2554,14 +2563,14 @@ local function buildMenu()
         hitboxCfg.Enabled = not hitboxCfg.Enabled
         hitboxEnabledButton.Text = hitboxCfg.Enabled and "ON" or "OFF"
         hitboxEnabledButton.TextColor3 = hitboxCfg.Enabled and Color3.fromRGB(111, 207, 151)
-            or Color3.fromRGB(143, 151, 163)
+            or Color3.fromRGB(154, 171, 192)
         applyHitboxChanges()
     end)
 
     hitboxVisibleButton.Activated:Connect(function()
         hitboxCfg.Visible = not hitboxCfg.Visible
         hitboxVisibleButton.Text = hitboxCfg.Visible and "VISIBLE" or "HIDDEN"
-        hitboxVisibleButton.TextColor3 = hitboxCfg.Visible and accentColor or Color3.fromRGB(143, 151, 163)
+        hitboxVisibleButton.TextColor3 = hitboxCfg.Visible and accentColor or Color3.fromRGB(154, 171, 192)
         applyHitboxChanges()
     end)
 
@@ -2579,58 +2588,60 @@ local function buildMenu()
 
     -- Settings
     heading(settingsPage, "Settings", "Preferencias leves para o painel.")
-    local settingsCard = uiCard(settingsPage, "SettingsCard", UDim2.fromOffset(22, 78), UDim2.new(1, -44, 0, 168))
+    local settingsCard = uiCard(settingsPage, "SettingsCard", UDim2.fromOffset(22, 82), UDim2.new(1, -44, 0, 208))
     uiText(settingsCard, "SYSTEM MONITOR", {
-        Position = UDim2.fromOffset(14, 12),
-        Size = UDim2.new(1, -145, 0, 18),
+        Position = UDim2.fromOffset(16, 17),
+        Size = UDim2.new(1, -160, 0, 20),
         Font = Enum.Font.GothamSemibold,
         TextSize = 11,
     })
     uiText(settingsCard, "Pause live metrics when you do not need them.", {
-        Position = UDim2.fromOffset(14, 32),
-        Size = UDim2.new(1, -145, 0, 15),
+        Position = UDim2.fromOffset(16, 40),
+        Size = UDim2.new(1, -160, 0, 16),
         Font = Enum.Font.Gotham,
         TextSize = 9,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
+        TextColor3 = Color3.fromRGB(143, 160, 180),
     })
     local monitorToggle = uiButton(settingsCard, "ON", {
-        Position = UDim2.new(1, -83, 0, 18),
-        Size = UDim2.fromOffset(66, 28),
+        Position = UDim2.new(1, -98, 0, 23),
+        Size = UDim2.fromOffset(80, 30),
     })
     uiText(settingsCard, "COMPACT PANEL", {
-        Position = UDim2.fromOffset(14, 79),
-        Size = UDim2.new(1, -145, 0, 18),
+        Position = UDim2.fromOffset(16, 112),
+        Size = UDim2.new(1, -160, 0, 20),
         Font = Enum.Font.GothamSemibold,
         TextSize = 11,
     })
     uiText(settingsCard, "Reduce the panel footprint.", {
-        Position = UDim2.fromOffset(14, 99),
-        Size = UDim2.new(1, -145, 0, 15),
+        Position = UDim2.fromOffset(16, 135),
+        Size = UDim2.new(1, -160, 0, 16),
         Font = Enum.Font.Gotham,
         TextSize = 9,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
+        TextColor3 = Color3.fromRGB(143, 160, 180),
     })
     local compactToggle = uiButton(settingsCard, "OFF", {
-        Position = UDim2.new(1, -83, 0, 85),
-        Size = UDim2.fromOffset(66, 28),
+        Position = UDim2.new(1, -98, 0, 118),
+        Size = UDim2.fromOffset(80, 30),
     })
     local accentButton = uiButton(settingsPage, "CHANGE ACCENT", {
-        Position = UDim2.fromOffset(22, 262),
-        Size = UDim2.fromOffset(132, 30),
+        Position = UDim2.fromOffset(22, 312),
+        Size = UDim2.fromOffset(148, 34),
     })
     local settingsNote = uiText(settingsPage, "Panel shortcut: INSERT  •  No blur  •  No animated graphs  •  Low-frequency monitor", {
-        Position = UDim2.fromOffset(23, 305),
-        Size = UDim2.new(1, -46, 0, 34),
+        Position = UDim2.fromOffset(24, 362),
+        Size = UDim2.new(1, -48, 0, 44),
         Font = Enum.Font.Gotham,
         TextSize = 9,
-        TextColor3 = Color3.fromRGB(133, 143, 157),
+        TextColor3 = Color3.fromRGB(143, 160, 180),
         TextWrapped = true,
     })
 
     local function applyAccent()
         accentColor = accentChoices[accentIndex]
+        for _, element in ipairs(accentElements) do
+            element.BackgroundColor3 = accentColor
+        end
         logoText.TextColor3 = accentColor
-        headerAccentLine.BackgroundColor3 = accentColor
         for _, item in pairs(navItems) do item.bar.BackgroundColor3 = accentColor end
         for _, row in pairs(spreadRows) do row.fill.BackgroundColor3 = accentColor end
         for _, row in pairs(hitboxRows) do
@@ -2656,7 +2667,7 @@ local function buildMenu()
     compactToggle.Activated:Connect(function()
         compactMode = not compactMode
         compactToggle.Text = compactMode and "ON" or "OFF"
-        menuPanel.Size = compactMode and UDim2.fromOffset(680, 470) or UDim2.fromOffset(740, 500)
+        menuPanel.Size = compactMode and UDim2.fromOffset(820, 550) or UDim2.fromOffset(880, 580)
     end)
 
     -- Render helpers
@@ -2680,14 +2691,14 @@ local function buildMenu()
             if active then protected = protected + 1 end
 
             local row = uiCard(menuPlayers, "Player_" .. tostring(targetPlayer.UserId),
-                UDim2.new(0, 0, 0, 0), UDim2.new(1, -5, 0, 47))
+                UDim2.new(0, 0, 0, 0), UDim2.new(1, -5, 0, 56))
             row.LayoutOrder = index
 
             local avatar = uiNew("ImageLabel", {
                 Name = "Avatar",
-                Position = UDim2.fromOffset(8, 6),
-                Size = UDim2.fromOffset(35, 35),
-                BackgroundColor3 = Color3.fromRGB(36, 41, 49),
+                Position = UDim2.fromOffset(10, 8),
+                Size = UDim2.fromOffset(40, 40),
+                BackgroundColor3 = Color3.fromRGB(28, 44, 65),
                 Image = "",
                 BorderSizePixel = 0,
             }, row)
@@ -2700,8 +2711,8 @@ local function buildMenu()
             end)
 
             uiText(row, targetPlayer.DisplayName, {
-                Position = UDim2.fromOffset(54, 5),
-                Size = UDim2.new(1, -172, 0, 22),
+                Position = UDim2.fromOffset(62, 8),
+                Size = UDim2.new(1, -205, 0, 22),
                 Font = Enum.Font.GothamMedium,
                 TextSize = 12,
                 TextTruncate = Enum.TextTruncate.AtEnd,
@@ -2709,8 +2720,8 @@ local function buildMenu()
             })
             if targetPlayer.DisplayName ~= targetPlayer.Name then
                 uiText(row, "@" .. targetPlayer.Name, {
-                    Position = UDim2.fromOffset(54, 25),
-                    Size = UDim2.new(1, -172, 0, 15),
+                    Position = UDim2.fromOffset(62, 29),
+                    Size = UDim2.new(1, -205, 0, 15),
                     TextSize = 10,
                     TextTruncate = Enum.TextTruncate.AtEnd,
                     TextColor3 = Color3.fromRGB(143, 148, 157),
@@ -2718,11 +2729,11 @@ local function buildMenu()
             end
 
             local eye = uiButton(row, "◉", {
-                Position = UDim2.new(1, -96, 0, 6),
-                Size = UDim2.fromOffset(32, 35),
+                Position = UDim2.new(1, -112, 0, 8),
+                Size = UDim2.fromOffset(34, 40),
                 BackgroundTransparency = 1,
                 TextSize = 17,
-                TextColor3 = spectateTarget == targetPlayer and accentColor or Color3.fromRGB(165, 174, 187),
+                TextColor3 = spectateTarget == targetPlayer and accentColor or Color3.fromRGB(183, 199, 218),
             })
             eye.Activated:Connect(function()
                 startSpectating(targetPlayer)
@@ -2730,10 +2741,10 @@ local function buildMenu()
             end)
 
             local toggle = uiButton(row, active and "ON" or "OFF", {
-                Position = UDim2.new(1, -58, 0, 8),
-                Size = UDim2.fromOffset(48, 31),
+                Position = UDim2.new(1, -70, 0, 10),
+                Size = UDim2.fromOffset(56, 36),
                 TextSize = 10,
-                TextColor3 = active and Color3.fromRGB(111, 207, 151) or Color3.fromRGB(143, 151, 163),
+                TextColor3 = active and Color3.fromRGB(111, 207, 151) or Color3.fromRGB(154, 171, 192),
             })
             toggle.Activated:Connect(function()
                 local targetList = selectedPlayerTab == "whitelist" and Config.Triggerbot.Whitelist.List or Config.IncognitoWhitelist
@@ -2771,12 +2782,7 @@ local function buildMenu()
 
     renderMenu = function()
         for pageName, pageFrame in pairs(pages) do
-            local activePage = pageName:lower() == selectedTab
-            pageFrame.Visible = activePage
-            if activePage and lastRenderedTab ~= selectedTab then
-                pageFrame.Position = UDim2.fromOffset(8, 0)
-                playUiTween(pageFrame, PAGE_IN, {Position = UDim2.fromOffset(0, 0)})
-            end
+            pageFrame.Visible = pageName:lower() == selectedTab
         end
         lastRenderedTab = selectedTab
 
@@ -2787,23 +2793,22 @@ local function buildMenu()
             if active then
                 item.bar.Visible = true
                 if not wasActive then
-                    item.bar.Size = UDim2.fromOffset(3, 0)
-                    playUiTween(item.bar, PAGE_IN, {Size = UDim2.fromOffset(3, 25)})
+                    item.bar.Size = UDim2.fromOffset(3, 26)
                 end
             else
                 item.bar.Visible = false
-                item.bar.Size = UDim2.fromOffset(3, 0)
+                item.bar.Size = UDim2.fromOffset(3, 26)
             end
             item.button.BackgroundTransparency = active and 0 or 1
-            item.button.BackgroundColor3 = active and Color3.fromRGB(29, 36, 46) or Color3.fromRGB(18, 22, 29)
-            item.title.TextColor3 = active and Color3.fromRGB(241, 244, 249) or Color3.fromRGB(135, 146, 161)
-            item.icon.TextColor3 = active and accentColor or Color3.fromRGB(135, 146, 161)
+            item.button.BackgroundColor3 = active and Color3.fromRGB(24, 40, 60) or Color3.fromRGB(13, 20, 31)
+            item.title.TextColor3 = active and Color3.fromRGB(244, 248, 255) or Color3.fromRGB(148, 166, 188)
+            item.icon.TextColor3 = active and accentColor or Color3.fromRGB(148, 166, 188)
             item.stroke.Transparency = active and 0.72 or 1
         end
 
         if selectedTab == "players" then
-            tabWhitelist.BackgroundColor3 = selectedPlayerTab == "whitelist" and Color3.fromRGB(39, 49, 62) or Color3.fromRGB(31, 37, 46)
-            tabIncognito.BackgroundColor3 = selectedPlayerTab == "incognito" and Color3.fromRGB(39, 49, 62) or Color3.fromRGB(31, 37, 46)
+            tabWhitelist.BackgroundColor3 = selectedPlayerTab == "whitelist" and Color3.fromRGB(32, 54, 80) or Color3.fromRGB(23, 37, 55)
+            tabIncognito.BackgroundColor3 = selectedPlayerTab == "incognito" and Color3.fromRGB(32, 54, 80) or Color3.fromRGB(23, 37, 55)
             renderPlayers()
         elseif selectedTab == "system" then
             updateSystemMonitor()
@@ -2872,8 +2877,8 @@ local function buildMenu()
         body.Visible = not body.Visible
         menuBodyVisible = body.Visible
         menuPanel.Size = body.Visible
-            and (compactMode and UDim2.fromOffset(680, 470) or UDim2.fromOffset(740, 500))
-            or UDim2.fromOffset(740, 66)
+            and (compactMode and UDim2.fromOffset(820, 550) or UDim2.fromOffset(880, 580))
+            or UDim2.fromOffset(880, 74)
         minimize.Text = body.Visible and "–" or "+"
         if syncFPSCounter then syncFPSCounter() end
         if body.Visible and selectedTab == "system" and monitorEnabled and updateSystemMonitor then
