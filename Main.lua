@@ -1,4 +1,4 @@
--- V4WARE V21.0 - UTILITY DASHBOARD (base V20.5, preferencias de UI separadas)
+-- V4WARE V21.1 - UTILITY DASHBOARD (base V20.5, preferencias de UI separadas)
 -- Este arquivo pressupoe que a tabela global Config ja existe no ambiente que o carrega.
 -- Mantenha a configuracao no arquivo/trecho local e hospede este arquivo como Main.lua.
 -- =============================================================
@@ -1514,7 +1514,7 @@ end
 
 
 -- =============================================================
--- V4WARE V21.0 UTILITY DASHBOARD
+-- V4WARE V21.1 UTILITY DASHBOARD
 -- Dashboard, telemetria e preferencias visuais; modulos de jogo fora do escopo desta atualizacao.
 -- =============================================================
 local menuGui, menuPanel, menuPlayers, menuCount, tabWhitelist, tabIncognito, tabSystem, monitorFrame
@@ -1872,7 +1872,7 @@ local function buildMenu()
         TextSize = 19,
         TextColor3 = Color3.fromRGB(244, 248, 255),
     })
-    uiText(header, "UTILITY CONTROL CENTER  •  V21.0", {
+    uiText(header, "UTILITY CONTROL CENTER  •  V21.1", {
         Position = UDim2.fromOffset(75, 40),
         Size = UDim2.fromOffset(270, 15),
         Font = Enum.Font.GothamMedium,
@@ -1948,7 +1948,7 @@ local function buildMenu()
         BackgroundTransparency = 1,
     }, sidebar)
     uiNew("UIListLayout", {
-        Padding = UDim.new(0, 7),
+        Padding = UDim.new(0, 6),
         SortOrder = Enum.SortOrder.LayoutOrder,
     }, nav)
 
@@ -1960,7 +1960,7 @@ local function buildMenu()
         TextSize = 8,
         TextColor3 = Color3.fromRGB(113, 132, 154),
     })
-    uiText(footer, "V21.0  •  UTILITY", {
+    uiText(footer, "V21.1  •  UTILITY", {
         Position = UDim2.fromOffset(10, 22),
         Size = UDim2.new(1, -20, 0, 16),
         Font = Enum.Font.GothamMedium,
@@ -2024,7 +2024,7 @@ local function buildMenu()
     local function navItem(name, subtitle, glyph, order)
         local b = uiNew("TextButton", {
             Name = name .. "Nav",
-            Size = UDim2.new(1, 0, 0, 44),
+            Size = UDim2.new(1, 0, 0, 45),
             BackgroundColor3 = Color3.fromRGB(13, 20, 31),
             BackgroundTransparency = 1,
             BorderSizePixel = 0,
@@ -2042,23 +2042,23 @@ local function buildMenu()
         }, b)
         uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, bar)
         local icon = uiText(b, glyph, {
-            Position = UDim2.fromOffset(11, 1),
-            Size = UDim2.fromOffset(24, 42),
+            Position = UDim2.fromOffset(8, 1),
+            Size = UDim2.fromOffset(28, 43),
             TextXAlignment = Enum.TextXAlignment.Center,
-            Font = Enum.Font.GothamSemibold,
-            TextSize = 13,
+            Font = Enum.Font.GothamBold,
+            TextSize = 14,
             TextColor3 = Color3.fromRGB(148, 166, 188),
         })
         local title = uiText(b, name, {
-            Position = UDim2.fromOffset(43, 5),
-            Size = UDim2.new(1, -50, 0, 18),
+            Position = UDim2.fromOffset(44, 4),
+            Size = UDim2.new(1, -52, 0, 19),
             Font = Enum.Font.GothamSemibold,
             TextSize = 11,
             TextColor3 = Color3.fromRGB(148, 166, 188),
         })
         uiText(b, subtitle, {
-            Position = UDim2.fromOffset(43, 24),
-            Size = UDim2.new(1, -50, 0, 13),
+            Position = UDim2.fromOffset(44, 24),
+            Size = UDim2.new(1, -52, 0, 13),
             Font = Enum.Font.Gotham,
             TextSize = 8,
             TextColor3 = Color3.fromRGB(104, 122, 144),
@@ -2121,8 +2121,15 @@ local function buildMenu()
         })
     end
 
-    -- Overview V21.0: telemetria resumida + status visual dos modulos.
+    -- Overview V21.1: hierarquia visual mais clara, sem alterar os dados exibidos.
     heading(overviewPage, "Overview", "Resumo da sessao, desempenho local e estado dos modulos.")
+    uiText(overviewPage, "LIVE TELEMETRY", {
+        Position = UDim2.fromOffset(22, 65),
+        Size = UDim2.new(1, -44, 0, 12),
+        Font = Enum.Font.GothamBold,
+        TextSize = 8,
+        TextColor3 = Color3.fromRGB(113, 132, 154),
+    })
     local dashboardMetrics = {}
     local function dashboardMetric(key, title, x)
         local card = uiCard(overviewPage, "Metric_" .. key, UDim2.fromOffset(x, 82), UDim2.fromOffset(210, 72))
@@ -2145,43 +2152,60 @@ local function buildMenu()
     dashboardMetric("Ping", "Network ping", 246)
     dashboardMetric("Memory", "Client memory", 470)
 
+    uiText(overviewPage, "MODULE STATUS", {
+        Position = UDim2.fromOffset(22, 156),
+        Size = UDim2.new(1, -44, 0, 12),
+        Font = Enum.Font.GothamBold,
+        TextSize = 8,
+        TextColor3 = Color3.fromRGB(113, 132, 154),
+    })
+
     local featureCards = {}
-    local function featureCard(key, title, x, y)
-        local card = uiCard(overviewPage, key, UDim2.fromOffset(x, y), UDim2.fromOffset(294, 52))
+    local function featureCard(key, title, x, y, cardSize)
+        local card = uiCard(
+            overviewPage,
+            key,
+            UDim2.fromOffset(x, y),
+            cardSize or UDim2.fromOffset(294, 52)
+        )
+        -- Hover discreto por propriedades; sem tween ou loop por frame.
+        addHoverMotion(card, {Blend = 0.07})
         local dotFeature = uiNew("Frame", {
-            Position = UDim2.fromOffset(15, 22),
+            Position = UDim2.fromOffset(15, 23),
             Size = UDim2.fromOffset(7, 7),
             BackgroundColor3 = Color3.fromRGB(105, 113, 124),
             BorderSizePixel = 0,
         }, card)
         uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, dotFeature)
         uiText(card, title, {
-            Position = UDim2.fromOffset(34, 6),
-            Size = UDim2.new(1, -112, 0, 20),
+            Position = UDim2.fromOffset(34, 0),
+            Size = UDim2.new(1, -112, 1, 0),
             Font = Enum.Font.GothamMedium,
             TextSize = 10,
+            TextYAlignment = Enum.TextYAlignment.Center,
             TextColor3 = Color3.fromRGB(225, 235, 247),
         })
         local value = uiText(card, "OFF", {
-            Position = UDim2.new(1, -78, 0, 6),
-            Size = UDim2.fromOffset(62, 20),
+            Position = UDim2.new(1, -78, 0, 0),
+            Size = UDim2.fromOffset(62, 52),
             Font = Enum.Font.GothamBold,
             TextSize = 9,
             TextXAlignment = Enum.TextXAlignment.Right,
+            TextYAlignment = Enum.TextYAlignment.Center,
             TextColor3 = Color3.fromRGB(145, 164, 186),
         })
         featureCards[key] = {value = value, dot = dotFeature}
     end
 
-    featureCard("Triggerbot", "Triggerbot", 22, 170)
-    featureCard("InfiniteJump", "Infinite Jump", 326, 170)
-    featureCard("ESP", "ESP", 22, 228)
-    featureCard("Camlock", "Camlock", 326, 228)
-    featureCard("Hitbox", "Hitbox Expander", 22, 286)
-    featureCard("Spread", "Spread Modification", 326, 286)
-    featureCard("WeaponSwitch", "Weapon Switch", 22, 344)
+    featureCard("Triggerbot", "Triggerbot", 22, 174)
+    featureCard("InfiniteJump", "Infinite Jump", 326, 174)
+    featureCard("ESP", "ESP", 22, 232)
+    featureCard("Camlock", "Camlock", 326, 232)
+    featureCard("Hitbox", "Hitbox Expander", 22, 290)
+    featureCard("Spread", "Spread Modification", 326, 290)
+    featureCard("WeaponSwitch", "Weapon Switch", 22, 348, UDim2.new(1, -44, 0, 52))
 
-    local overviewBottom = uiCard(overviewPage, "OverviewSession", UDim2.fromOffset(22, 412), UDim2.new(1, -44, 0, 70))
+    local overviewBottom = uiCard(overviewPage, "OverviewSession", UDim2.fromOffset(22, 410), UDim2.new(1, -44, 0, 70))
     uiText(overviewBottom, "SESSION", {
         Position = UDim2.fromOffset(15, 8),
         Size = UDim2.new(1, -30, 0, 13),
@@ -3239,7 +3263,7 @@ local function buildMenu()
 end
 
 buildMenu()
-if pushActivity then pushActivity("V4WARE V21.0 ready", "Utility dashboard initialized.", "success") end
+if pushActivity then pushActivity("V4WARE V21.1 ready", "Utility dashboard initialized.", "success") end
 
 -- FPS sampler sob demanda: não mantém callback RenderStepped quando o monitor
 -- não está visível/ativo. A medição continua com janela de 1 segundo.
@@ -3380,7 +3404,7 @@ local function stop()
     if env.DHC_Stop == stop then env.DHC_Stop = nil end
     if env.DHC_Status == status then env.DHC_Status = nil end
     if env.V4wareNotify then env.V4wareNotify = nil end
-    print("[V4ware V21.0] Parado; interface encerrada e conexoes limpas.")
+    print("[V4ware V21.1] Parado; interface encerrada e conexoes limpas.")
 end
 
 env.DHC_Stop = stop
@@ -3388,8 +3412,8 @@ env.DHC_Status = status
 refreshESP()
 updateHitboxes()
 updateSpread()
-print("[V4ware V21.0] Iniciado: painel (Overview / Players / Spread / Hitbox / System / Settings / Activity) | preferencias visuais separadas")
+print("[V4ware V21.1] Iniciado: painel (Overview / Players / Spread / Hitbox / System / Settings / Activity) | preferencias visuais separadas")
 print("[V4ware V20] Trigger: delay cliente 0 | DB 180 | Revolver 260 | Tactical 180 | limite geral 280 studs")
-print("[V4ware V21.0] Menu: atalho configuravel | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
+print("[V4ware V21.1] Menu: atalho configuravel | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
 warn("[V4ware V20] Experimento de patch de CONSTANTES especificas. Sem hook FireServer; resultado real nao testado.")
 print("[V4ware WS] Weapon Switch ativo: V -> DB / Tactical / Revolver, respeitando cooldowns do jogo")
