@@ -303,8 +303,8 @@ local function onWhitelist(player)
     return not isWhitelisted(player) and not isIncognito(player)
 end
 
-local function passes(player, checks)
-    if not player or player == LocalPlayer or not onWhitelist(player) then return false end
+local function passes(player, checks, alreadyWhitelisted)
+    if not player or player == LocalPlayer or (not alreadyWhitelisted and not onWhitelist(player)) then return false end
     local character = charOf(player)
     local hum = humanoidOf(character)
     if not character or not hum or hum.Health <= 0 then return false end
@@ -324,18 +324,28 @@ local function passes(player, checks)
     return true
 end
 
+-- RaycastParams compartilhado: evita criar parametros e tabelas a cada frame.
+-- O filtro so e atualizado quando o personagem local muda (respawn).
+local playerRaycastParams = RaycastParams.new()
+playerRaycastParams.FilterType = Enum.RaycastFilterType.Exclude
+playerRaycastParams.IgnoreWater = true
+local raycastFilterCharacter = nil
+
+local function syncPlayerRaycastFilter()
+    local character = charOf(LocalPlayer)
+    if character ~= raycastFilterCharacter then
+        raycastFilterCharacter = character
+        playerRaycastParams.FilterDescendantsInstances = character and { character } or {}
+    end
+end
+
 local function visible(part, character)
     local cam = camera()
     if not cam or not part then return false end
     local difference = part.Position - cam.CFrame.Position
     if difference.Magnitude < 0.01 then return true end
-    local filter = {}
-    if charOf(LocalPlayer) then table.insert(filter, charOf(LocalPlayer)) end
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = filter
-    params.IgnoreWater = true
-    local hit = Workspace:Raycast(cam.CFrame.Position, difference, params)
+    syncPlayerRaycastFilter()
+    local hit = Workspace:Raycast(cam.CFrame.Position, difference, playerRaycastParams)
     return hit == nil or (character and hit.Instance:IsDescendantOf(character))
 end
 
@@ -442,49 +452,57 @@ end
 -- TRIGGERBOT (TENTA ACIONAR TOOL; NAO IGNORA VALIDACOES DO JOGO)
 -- =============================================================
 local function attemptShot(tool)
-    -- Usar o evento natural Tool:Activate para nao depender de codigo remoto.
-    -- Alguns jogos so disparam pela entrada real do mouse: nesse caso nao funcionara.
-    local ok = pcall(function() tool:Activate() end)
+    -- Mantem Tool:Activate e as validacoes/cooldowns naturais do jogo.
+    -- Passar a funcao e o self diretamente evita criar uma closure a cada disparo.
+    local ok = pcall(tool.Activate, tool)
     if ok then lastShot = os.clock() end
 end
 
 local function updateTrigger()
-    if weaponSwitchBusy then return end -- evita disparos concorrentes durante a sequencia
+    if weaponSwitchBusy then return end
     if not Config.Triggerbot.Enabled or not triggerActive then return end
-    -- FireDelay=0: nenhuma espera artificial antes de tentar Tool:Activate().
-    -- Executa a checagem a cada RenderStepped; nao acelera a cadencia imposta pelo jogo.
+
+    local now = os.clock()
     local clientDelay = math.max(0, tonumber(Config.Triggerbot.FireDelay) or 0)
-    if clientDelay > 0 and os.clock() - lastShot < clientDelay then return end
+    if clientDelay > 0 and now - lastShot < clientDelay then return end
+
     local tool = equippedTool()
     if not tool or knife(tool) then return end
+
     local range = Config.Triggerbot["Range-Check"]
     local maxDist = range.Data[tool.Name]
     if range.Enabled and maxDist == nil then return end
+
     local cam = camera()
     if not cam then return end
+
     local mouse = UserInputService:GetMouseLocation()
     local ray = cam:ViewportPointToRay(mouse.X, mouse.Y)
-    local filter = {}
-    if charOf(LocalPlayer) then table.insert(filter, charOf(LocalPlayer)) end
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = filter
-    params.IgnoreWater = true
-    -- Limite real: aplica distancia maxima por arma e teto global.
     local length = math.clamp(tonumber(maxDist) or 0, 0, math.max(1, tonumber(range.HardCap) or 280))
     if length <= 0 then return end
-    local hit = Workspace:Raycast(ray.Origin, ray.Direction * length, params)
+
+    syncPlayerRaycastFilter()
+    local hit = Workspace:Raycast(ray.Origin, ray.Direction * length, playerRaycastParams)
     if not hit then return end
+
     local target = playerFromPart(hit.Instance)
     if not target or not onWhitelist(target) then return end
-    -- Segunda verificacao: distancia entre personagens, nao apenas camera e alvo.
+
+    -- Checagem de distancia sem Magnitude (evita a raiz quadrada).
     local myRoot = rootOf(charOf(LocalPlayer))
     local targetRoot = rootOf(charOf(target))
     if not myRoot or not targetRoot then return end
-    if (targetRoot.Position - myRoot.Position).Magnitude > length then return end
-    if Config.Triggerbot.Hitbox.Enabled and not passes(target, Config.Triggerbot.Hitbox.Checks) then return end
-    if not passes(target) then return end
+    local offset = targetRoot.Position - myRoot.Position
+    if offset:Dot(offset) > length * length then return end
+
+    -- Combina as validacoes comuns e as opcionais em uma unica passagem.
+    -- A whitelist ja foi verificada acima, portanto nao e consultada novamente.
+    local checks = Config.Triggerbot.Hitbox.Enabled and Config.Triggerbot.Hitbox.Checks or nil
+    if not passes(target, checks, true) then return end
+
+    -- Preserva o filtro Visible original. Os parametros do Raycast ja sao reutilizados.
     if Config.Triggerbot.Hitbox.Checks.Visible and not visible(hit.Instance, charOf(target)) then return end
+
     attemptShot(tool)
 end
 
