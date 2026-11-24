@@ -1,4 +1,4 @@
--- V4WARE V21.2 - UTILITY DASHBOARD (base V20.5, preferencias de UI separadas)
+-- V4WARE V21.3 - UTILITY DASHBOARD (base V20.5, preferencias de UI separadas)
 -- Este arquivo pressupoe que a tabela global Config ja existe no ambiente que o carrega.
 -- Mantenha a configuracao no arquivo/trecho local e hospede este arquivo como Main.lua.
 -- =============================================================
@@ -1435,7 +1435,7 @@ local function status()
     local localMatches = {}
     for name, count in pairs(spreadMatches) do localMatches[name] = count end
     return {
-        Version = 21.2,
+        Version = 21.3,
         Running = running,
         InfiniteJump = false,
         NoJumpCooldown = Config.Movement["No Jump Cooldown"],
@@ -1517,10 +1517,10 @@ end
 
 
 -- =============================================================
--- V4WARE V21.2 UTILITY DASHBOARD
+-- V4WARE V21.3 UTILITY DASHBOARD
 -- Dashboard, telemetria e preferencias visuais; modulos de jogo fora do escopo desta atualizacao.
 -- =============================================================
-local menuGui, menuPanel, menuPlayers, menuCount, tabWhitelist, tabIncognito, tabSystem, monitorFrame
+local menuGui, menuPanel, menuPlayers, menuCount, tabWhitelist, tabIncognito, monitorFrame
 local activityPage, activityList, activityCountLabel
 local panelScale
 local selectedTab = "overview"
@@ -1547,6 +1547,11 @@ local uiScaleValue = 1
 local pushActivity = nil
 local reportProfileSave = nil
 local activityRows = {}
+local perf = {
+    hudEnabled = false, toastEnabled = false, history = {},
+    ping = nil, memory = nil, lastAt = nil, benchmark = nil,
+    results = {}, bars = {}, toastToken = 0,
+}
 local avatarThumbnailCache = {}
 local accentColor = Color3.fromRGB(160, 190, 222)
 local accentChoices = {
@@ -1569,6 +1574,8 @@ local function sanitizeUIPreferences(data)
         MonitorEnabled = data.MonitorEnabled ~= false,
         PanelKey = keyCode,
         UIScale = math.clamp(tonumber(data.UIScale) or 1, 0.85, 1.10),
+        HUDEnabled = data.HUDEnabled == true,
+        ToastEnabled = data.ToastEnabled == true,
     }
 end
 
@@ -1589,6 +1596,8 @@ local function loadUIPreferences()
     monitorEnabled = clean.MonitorEnabled
     panelKey = clean.PanelKey
     uiScaleValue = clean.UIScale
+    perf.hudEnabled = clean.HUDEnabled
+    perf.toastEnabled = clean.ToastEnabled
     accentColor = accentChoices[accentIndex]
     return true
 end
@@ -1601,6 +1610,8 @@ local function saveUIPreferences()
         MonitorEnabled = monitorEnabled,
         PanelKey = panelKey.Name,
         UIScale = uiScaleValue,
+        HUDEnabled = perf.hudEnabled,
+        ToastEnabled = perf.toastEnabled,
     }
     env.V4wareUIPrefs = data
     if type(writefile) == "function" then
@@ -1806,6 +1817,73 @@ local function formatDuration(seconds)
     return string.format("%02d:%02d:%02d", hours, minutes, secs)
 end
 
+-- V21.3: shared telemetry cache, only populated by the existing FPS sampler.
+function perf.text(value, suffix)
+    if not monitorEnabled then return "PAUSED" end
+    if value == nil then return "--" end
+    local prefix = perf.lastAt and os.clock() - perf.lastAt > 2 and "~" or ""
+    return prefix .. string.format("%.0f", value) .. (suffix or "")
+end
+
+function perf.updateHUD()
+    if not perf.overlay or not perf.overlay.Parent then return end
+    perf.hud.Visible = perf.hudEnabled
+    if not perf.toastEnabled then
+        perf.toastToken = perf.toastToken + 1
+        perf.toast.Visible = false
+    end
+    if not perf.hudEnabled then return end
+    perf.hudText.Text = "V4WARE   |   " .. displayFPS() .. " FPS   |   "
+        .. perf.text(perf.ping, " ms") .. "   |   " .. perf.text(perf.memory, " MB")
+end
+
+function perf.showToast(title, detail, kind)
+    if not perf.toastEnabled or not perf.overlay or not perf.overlay.Parent then return end
+    perf.toastToken = perf.toastToken + 1
+    local token = perf.toastToken
+    perf.toastTitle.Text = tostring(title or "Event")
+    perf.toastDetail.Text = tostring(detail or "")
+    perf.toastTitle.TextColor3 = kind == "error" and Color3.fromRGB(224, 119, 119)
+        or (kind == "success" and Color3.fromRGB(111, 207, 151) or accentColor)
+    perf.toast.Visible = true
+    task.delay(3, function()
+        if running and perf.toastToken == token and perf.toast and perf.toast.Parent then
+            perf.toast.Visible = false
+        end
+    end)
+end
+
+function perf.cancelBenchmark(reason)
+    if not perf.benchmark then return end
+    perf.benchmark = nil
+    if pushActivity then pushActivity("Benchmark cancelled", reason or "Measurement stopped.", "info") end
+end
+
+function perf.record(frames, elapsed)
+    local now = os.clock()
+    if perf.lastAt and now - perf.lastAt > 3 then table.clear(perf.history) end
+    perf.lastAt = now
+    perf.ping, perf.memory = readPingMs(), readMemoryMb()
+    table.insert(perf.history, currentFPS)
+    if #perf.history > 60 then table.remove(perf.history, 1) end
+    local run = perf.benchmark
+    if run then
+        run.frames = run.frames + frames
+        run.elapsed = run.elapsed + elapsed
+        run.low = math.min(run.low, frames / elapsed)
+        run.high = math.max(run.high, frames / elapsed)
+        if run.elapsed >= 30 then
+            perf.results[run.slot] = {fps = run.frames / run.elapsed, low = run.low,
+                high = run.high, elapsed = run.elapsed}
+            perf.benchmark = nil
+            if pushActivity then pushActivity("Benchmark " .. run.slot .. " complete",
+                string.format("%.1f average FPS / %.1fs measured", run.frames / run.elapsed, run.elapsed), "success") end
+        end
+    end
+    perf.updateHUD()
+    if not perf.benchmark and syncFPSCounter then syncFPSCounter() end
+end
+
 local function buildMenu()
     local accentElements = {}
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 10)
@@ -1816,6 +1894,30 @@ local function buildMenu()
 
     local old = playerGui:FindFirstChild("V4ware_ControlPanel")
     if old then old:Destroy() end
+
+    do
+        local previous = playerGui:FindFirstChild("V4ware_PerformanceOverlay")
+        if previous then previous:Destroy() end
+        perf.overlay = uiNew("ScreenGui", {
+            Name = "V4ware_PerformanceOverlay", ResetOnSpawn = false,
+            ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 101,
+            IgnoreGuiInset = false,
+        }, playerGui)
+        perf.hud = uiCard(perf.overlay, "PerformanceHUD", UDim2.new(0.5, -190, 0, 8), UDim2.fromOffset(380, 30))
+        perf.hud.Visible = false
+        perf.hudText = uiText(perf.hud, "V4WARE  |  Waiting for sample", {
+            Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -20, 1, 0),
+            Font = Enum.Font.GothamMedium, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Center,
+        })
+        perf.toast = uiCard(perf.overlay, "Toast", UDim2.new(1, -332, 1, -144), UDim2.fromOffset(320, 66))
+        perf.toast.Visible = false
+        perf.toastTitle = uiText(perf.toast, "", {Position = UDim2.fromOffset(13, 8),
+            Size = UDim2.new(1, -26, 0, 20), Font = Enum.Font.GothamSemibold, TextSize = 12})
+        perf.toastDetail = uiText(perf.toast, "", {Position = UDim2.fromOffset(13, 30),
+            Size = UDim2.new(1, -26, 0, 29), TextSize = 10, TextWrapped = true,
+            TextColor3 = Color3.fromRGB(143, 160, 180)})
+        perf.updateHUD()
+    end
 
     menuGui = uiNew("ScreenGui", {
         Name = "V4ware_ControlPanel",
@@ -1846,6 +1948,7 @@ local function buildMenu()
     -- Header
     local header = uiNew("Frame", {
         Name = "Header",
+        Active = true,
         Size = UDim2.new(1, 0, 0, 74),
         BackgroundColor3 = Color3.fromRGB(13, 20, 31),
         BorderSizePixel = 0,
@@ -1882,7 +1985,7 @@ local function buildMenu()
         TextSize = 19,
         TextColor3 = Color3.fromRGB(244, 248, 255),
     })
-    uiText(header, "PREMIUM FINISH  •  V21.2", {
+    uiText(header, "PERFORMANCE ENGINE  •  V21.3", {
         Position = UDim2.fromOffset(75, 40),
         Size = UDim2.fromOffset(270, 15),
         Font = Enum.Font.GothamMedium,
@@ -1954,11 +2057,11 @@ local function buildMenu()
     local nav = uiNew("Frame", {
         Name = "Navigation",
         Position = UDim2.fromOffset(10, 49),
-        Size = UDim2.new(1, -20, 0, 360),
+        Size = UDim2.new(1, -20, 0, 350),
         BackgroundTransparency = 1,
     }, sidebar)
     uiNew("UIListLayout", {
-        Padding = UDim.new(0, 6),
+        Padding = UDim.new(0, 4),
         SortOrder = Enum.SortOrder.LayoutOrder,
     }, nav)
 
@@ -1970,7 +2073,7 @@ local function buildMenu()
         TextSize = 8,
         TextColor3 = Color3.fromRGB(113, 132, 154),
     })
-    uiText(footer, "V21.2  •  PREMIUM", {
+    uiText(footer, "V21.3  •  PERFORMANCE", {
         Position = UDim2.fromOffset(10, 22),
         Size = UDim2.new(1, -20, 0, 16),
         Font = Enum.Font.GothamMedium,
@@ -2006,6 +2109,7 @@ local function buildMenu()
     local hitboxPage = makePage("Hitbox")
     local settingsPage = makePage("Settings")
     activityPage = makePage("Activity")
+    perf.diagnostics = makePage("Diagnostics")
 
     local function heading(parent, title, subtitle)
         local headingMarker = uiNew("Frame", {
@@ -2034,7 +2138,7 @@ local function buildMenu()
     local function navItem(name, subtitle, glyph, order)
         local b = uiNew("TextButton", {
             Name = name .. "Nav",
-            Size = UDim2.new(1, 0, 0, 45),
+            Size = UDim2.new(1, 0, 0, 39),
             BackgroundColor3 = Color3.fromRGB(13, 20, 31),
             BackgroundTransparency = 1,
             BorderSizePixel = 0,
@@ -2052,8 +2156,8 @@ local function buildMenu()
         }, b)
         uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, bar)
         local icon = uiText(b, glyph, {
-            Position = UDim2.fromOffset(8, 1),
-            Size = UDim2.fromOffset(28, 43),
+            Position = UDim2.fromOffset(8, 0),
+            Size = UDim2.fromOffset(28, 39),
             TextXAlignment = Enum.TextXAlignment.Center,
             Font = Enum.Font.GothamBold,
             TextSize = 14,
@@ -2067,7 +2171,7 @@ local function buildMenu()
             TextColor3 = Color3.fromRGB(148, 166, 188),
         })
         uiText(b, subtitle, {
-            Position = UDim2.fromOffset(44, 24),
+            Position = UDim2.fromOffset(44, 21),
             Size = UDim2.new(1, -52, 0, 13),
             Font = Enum.Font.Gotham,
             TextSize = 8,
@@ -2112,26 +2216,9 @@ local function buildMenu()
     navItem("System", "Performance", "◫", 5)
     navItem("Settings", "Preferences", "⚙", 6)
     navItem("Activity", "Notifications / history", "◷", 7)
+    navItem("Diagnostics", "Startup report", "i", 8)
 
-    local function metricCard(parent, key, title, column, y)
-        local card = uiCard(parent, key, UDim2.new(column * 0.5, column * 6, 0, y), UDim2.new(0.5, -6, 0, 88))
-        uiText(card, title:upper(), {
-            Position = UDim2.fromOffset(15, 12),
-            Size = UDim2.new(1, -30, 0, 14),
-            Font = Enum.Font.GothamBold,
-            TextSize = 8,
-            TextColor3 = Color3.fromRGB(145, 164, 186),
-        })
-        monitorValues[key] = uiText(card, "--", {
-            Position = UDim2.fromOffset(15, 35),
-            Size = UDim2.new(1, -30, 0, 32),
-            Font = Enum.Font.GothamSemibold,
-            TextSize = 21,
-            TextColor3 = Color3.fromRGB(244, 248, 255),
-        })
-    end
-
-    -- Overview V21.2: hierarquia visual mais clara, sem alterar os dados exibidos.
+    -- Overview V21.3: hierarquia visual mais clara, sem alterar os dados exibidos.
     heading(overviewPage, "Overview", "Resumo da sessao, desempenho local e estado dos modulos.")
     uiText(overviewPage, "LIVE TELEMETRY", {
         Position = UDim2.fromOffset(22, 65),
@@ -2259,10 +2346,8 @@ local function buildMenu()
         setFeature("WeaponSwitch", weaponSwitchConfig().Enabled, true)
         if monitorEnabled then
             dashboardMetrics.FPS.Text = displayFPS()
-            local dashboardPing = readPingMs()
-            dashboardMetrics.Ping.Text = dashboardPing and string.format("%.0f ms", dashboardPing) or "N/A"
-            local dashboardMemory = readMemoryMb()
-            dashboardMetrics.Memory.Text = dashboardMemory and string.format("%.0f MB", dashboardMemory) or "N/A"
+            dashboardMetrics.Ping.Text = perf.text(perf.ping, " ms")
+            dashboardMetrics.Memory.Text = perf.text(perf.memory, " MB")
         else
             dashboardMetrics.FPS.Text = "PAUSED"
             dashboardMetrics.Ping.Text = "PAUSED"
@@ -2306,62 +2391,138 @@ local function buildMenu()
         TextColor3 = Color3.fromRGB(143, 160, 180),
     })
 
-    -- System
-    heading(systemPage, "System monitor", "Telemetria local com atualizacao em baixa frequencia.")
-    monitorFrame = uiNew("Frame", {
-        Name = "SystemMonitor",
-        Position = UDim2.fromOffset(22, 82),
-        Size = UDim2.new(1, -44, 1, -104),
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-    }, systemPage)
-    metricCard(monitorFrame, "FPS", "Frame rate", 0, 0)
-    metricCard(monitorFrame, "Ping", "Network ping", 1, 0)
-    metricCard(monitorFrame, "Memory", "Client memory", 0, 100)
-    metricCard(monitorFrame, "Players", "Players in session", 1, 100)
-    local systemSession = uiCard(monitorFrame, "SystemSession", UDim2.fromOffset(0, 200), UDim2.new(1, 0, 0, 82))
-    uiText(systemSession, "SESSION STATUS", {
-        Position = UDim2.fromOffset(15, 10),
-        Size = UDim2.new(1, -30, 0, 13),
-        Font = Enum.Font.GothamBold,
-        TextSize = 8,
-        TextColor3 = Color3.fromRGB(145, 164, 186),
-    })
-    monitorValues.Status = uiText(systemSession, "ONLINE  •  CLIENT MONITOR ACTIVE", {
-        Position = UDim2.fromOffset(15, 31),
-        Size = UDim2.new(1, -30, 0, 17),
-        Font = Enum.Font.GothamSemibold,
-        TextSize = 10,
-    })
-    monitorValues.Uptime = uiText(systemSession, "Session 00:00:00", {
-        Position = UDim2.fromOffset(15, 55),
-        Size = UDim2.new(1, -30, 0, 14),
-        Font = Enum.Font.Gotham,
-        TextSize = 9,
-        TextColor3 = Color3.fromRGB(145, 164, 186),
-    })
-
-    updateSystemMonitor = function()
-        if not monitorFrame or not monitorFrame.Parent then return end
-        monitorValues.FPS.Text = displayFPS()
-        if monitorEnabled then
-            local ping = readPingMs()
-            local memory = readMemoryMb()
-            monitorValues.Ping.Text = ping and string.format("%.0f ms", ping) or "N/A"
-            monitorValues.Memory.Text = memory and string.format("%.0f MB", memory) or "N/A"
-            local performanceLabel = currentFPS >= 120 and "GOOD PERFORMANCE"
-                or (currentFPS >= 60 and "NORMAL PERFORMANCE" or (currentFPS > 0 and "LOW PERFORMANCE" or "WARMING UP"))
-            if fpsSampleAt and os.clock() - fpsSampleAt > 2 then
-                performanceLabel = "LAST FPS SAMPLE  •  REFRESHING"
-            end
-            monitorValues.Status.Text = "ONLINE  •  " .. performanceLabel
-        else
-            monitorValues.Ping.Text = "PAUSED"
-            monitorValues.Memory.Text = "PAUSED"
-            monitorValues.Status.Text = "MONITOR PAUSED"
+    -- System: compact metrics, preallocated history bars and two manual benchmarks.
+    do
+        heading(systemPage, "Performance engine", "Shared telemetry  /  1 second samples  /  no automatic graphics changes.")
+        monitorFrame = uiNew("Frame", {
+            Name = "SystemMonitor", Position = UDim2.fromOffset(22, 78),
+            Size = UDim2.new(1, -44, 1, -90), BackgroundTransparency = 1,
+        }, systemPage)
+        for i, entry in ipairs({{"FPS", "FRAME RATE"}, {"Ping", "NETWORK PING"},
+                {"Memory", "CLIENT MEMORY"}, {"Players", "PLAYERS"}}) do
+            local card = uiCard(monitorFrame, entry[1], UDim2.new((i-1)/4, 2*(i-1), 0, 0), UDim2.new(0.25, -6, 0, 65))
+            uiText(card, entry[2], {Position = UDim2.fromOffset(10, 7), Size = UDim2.new(1, -20, 0, 13),
+                TextSize = 8, Font = Enum.Font.GothamBold, TextColor3 = Color3.fromRGB(145,164,186)})
+            monitorValues[entry[1]] = uiText(card, "--", {Position = UDim2.fromOffset(10, 23),
+                Size = UDim2.new(1, -20, 0, 30), TextSize = 18, Font = Enum.Font.GothamSemibold})
         end
-        monitorValues.Players.Text = tostring(#Players:GetPlayers())
-        monitorValues.Uptime.Text = "Session  " .. formatDuration(os.clock() - sessionStartedAt)
+        local historyCard = uiCard(monitorFrame, "History", UDim2.fromOffset(0, 77), UDim2.new(1, 0, 0, 127))
+        uiText(historyCard, "FPS HISTORY  /  UP TO 60 SAMPLES", {Position = UDim2.fromOffset(12, 7),
+            Size = UDim2.new(1, -24, 0, 15), Font = Enum.Font.GothamBold, TextSize = 9})
+        local summary = uiText(historyCard, "Waiting for samples", {Position = UDim2.fromOffset(12, 23),
+            Size = UDim2.new(1,-24,0,15), TextSize = 9, TextColor3 = Color3.fromRGB(145,164,186)})
+        local graph = uiNew("Frame", {Position = UDim2.fromOffset(12, 43), Size = UDim2.new(1,-24,0,58),
+            BackgroundTransparency = 1, ClipsDescendants = true}, historyCard)
+        for i=1,60 do
+            perf.bars[i] = uiNew("Frame", {AnchorPoint = Vector2.new(0,1), Position = UDim2.new((i-1)/60,0,1,0),
+                Size = UDim2.new(1/60,-2,0,1), BorderSizePixel = 0,
+                BackgroundColor3 = accentColor, Visible = false}, graph)
+            table.insert(accentElements, perf.bars[i])
+        end
+        uiText(historyCard, "Oldest", {Position = UDim2.fromOffset(12,105),
+            Size = UDim2.new(0.5,-12,0,14), TextSize = 8, TextColor3 = Color3.fromRGB(145,164,186)})
+        uiText(historyCard, "Latest", {Position = UDim2.new(0.5,0,0,105),
+            Size = UDim2.new(0.5,-12,0,14), TextSize = 8, TextXAlignment = Enum.TextXAlignment.Right,
+            TextColor3 = Color3.fromRGB(145,164,186)})
+        local bench = uiCard(monitorFrame, "Benchmark", UDim2.fromOffset(0,216), UDim2.new(1,0,0,104))
+        uiText(bench, "BENCHMARK  /  30 SECONDS EACH", {Position = UDim2.fromOffset(12,7),
+            Size = UDim2.new(1,-24,0,15), Font = Enum.Font.GothamBold, TextSize = 9})
+        local result = uiText(bench, "A: --   |   B: --", {Position = UDim2.fromOffset(12,26),
+            Size = UDim2.new(1,-24,0,18), TextSize = 11})
+        local a = uiButton(bench,"RUN A",{Position=UDim2.fromOffset(12,49),Size=UDim2.fromOffset(78,26)})
+        local b = uiButton(bench,"RUN B",{Position=UDim2.fromOffset(98,49),Size=UDim2.fromOffset(78,26)})
+        local cancel = uiButton(bench,"CANCEL",{Position=UDim2.fromOffset(184,49),Size=UDim2.fromOffset(78,26)})
+        local progress = uiText(bench,"Run A, change graphics manually, then run B.", {Position=UDim2.fromOffset(12,80),
+            Size=UDim2.new(1,-24,0,17),TextSize=9,TextColor3=Color3.fromRGB(145,164,186)})
+        local session = uiCard(monitorFrame,"Session",UDim2.fromOffset(0,332),UDim2.new(1,0,0,51))
+        monitorValues.Status = uiText(session,"WARMING UP",{Position=UDim2.fromOffset(12,5),
+            Size=UDim2.new(1,-170,0,18),TextSize=10,Font=Enum.Font.GothamSemibold})
+        monitorValues.Uptime = uiText(session,"Session 00:00:00",{Position=UDim2.fromOffset(12,25),
+            Size=UDim2.new(1,-170,0,16),TextSize=9,TextColor3=Color3.fromRGB(145,164,186)})
+        local hud = uiButton(session,"HUD OFF",{Position=UDim2.new(1,-142,0,11),Size=UDim2.fromOffset(130,29)})
+        perf.hudButton = hud
+        function perf.refresh()
+            local count = #perf.history
+            local lo, hi, total = math.huge, 0, 0
+            for _, value in ipairs(perf.history) do lo=math.min(lo,value); hi=math.max(hi,value); total=total+value end
+            local state = not monitorEnabled and "PAUSED  /  " or (perf.lastAt and os.clock()-perf.lastAt>2 and "LAST  /  " or "")
+            summary.Text = count > 0 and (state .. string.format("AVG %.0f  /  MIN %.0f  /  MAX %.0f  /  %d samples", total/count,lo,hi,count)) or "Waiting for samples"
+            for i, bar in ipairs(perf.bars) do
+                local value = perf.history[i-(60-count)]
+                bar.Visible = value ~= nil
+                if value then bar.Size = UDim2.new(1/60,-2,math.clamp(value/math.max(hi,1),0.015,1),0) end
+            end
+            local ra, rb = perf.results.A, perf.results.B
+            local cmp = ra and rb and ra.fps>0 and string.format("  |  %+.1f%%",(rb.fps/ra.fps-1)*100) or ""
+            result.Text = "A: " .. (ra and string.format("%.1f FPS",ra.fps) or "--") .. "   |   B: " .. (rb and string.format("%.1f FPS",rb.fps) or "--") .. cmp
+            local run = perf.benchmark
+            progress.Text = run and string.format("RUN %s  /  %.0f of 30 measured seconds",run.slot,math.min(run.elapsed,30))
+                or "Run A, change graphics manually, then run B. Same scene recommended."
+            hud.Text = perf.hudEnabled and "HUD ON" or "HUD OFF"
+        end
+        local function start(slot)
+            if not monitorEnabled then
+                if pushActivity then pushActivity("Monitor paused", "Enable telemetry in Settings first.", "info") end
+                return
+            end
+            if perf.benchmark then return end
+            perf.benchmark = {slot=slot,frames=0,elapsed=0,low=math.huge,high=0}
+            fpsFrameCount, fpsElapsed = 0, 0
+            if syncFPSCounter then syncFPSCounter() end
+            perf.refresh()
+            if pushActivity then pushActivity("Benchmark "..slot.." started","30 seconds of local frame timing.","info") end
+        end
+        a.Activated:Connect(function() start("A") end)
+        b.Activated:Connect(function() start("B") end)
+        cancel.Activated:Connect(function()
+            perf.cancelBenchmark("Cancelled by user.")
+            if syncFPSCounter then syncFPSCounter() end
+            perf.refresh()
+        end)
+        hud.Activated:Connect(function()
+            perf.hudEnabled = not perf.hudEnabled
+            perf.updateHUD(); perf.refresh()
+            if syncFPSCounter then syncFPSCounter() end
+            if reportProfileSave then reportProfileSave() end
+            if pushActivity then pushActivity("Performance HUD",perf.hudEnabled and "Enabled." or "Disabled.","info") end
+        end)
+        updateSystemMonitor = function()
+            if not monitorFrame or not monitorFrame.Parent then return end
+            monitorValues.FPS.Text = displayFPS()
+            monitorValues.Ping.Text = perf.text(perf.ping," ms")
+            monitorValues.Memory.Text = perf.text(perf.memory," MB")
+            monitorValues.Players.Text = tostring(#Players:GetPlayers())
+            monitorValues.Status.Text = not monitorEnabled and "MONITOR PAUSED" or (not fpsSampleAt and "WARMING UP" or (os.clock()-fpsSampleAt>2 and "LAST SAMPLE / REFRESHING" or "LIVE / LOCAL TELEMETRY"))
+            monitorValues.Uptime.Text = "Session " .. formatDuration(os.clock()-sessionStartedAt)
+            perf.refresh()
+        end
+        perf.refresh()
+    end
+
+    -- Diagnostics: display the existing startup report only; never apply or retry flags here.
+    do
+        heading(perf.diagnostics,"Diagnostics","Startup report  /  read-only  /  no new flag requests.")
+        local report = uiCard(perf.diagnostics,"StartupReport",UDim2.fromOffset(22,78),UDim2.new(1,-44,0,68))
+        uiText(report,string.format("%d / %d VERIFIED",fastFlagStatus.Verified,fastFlagStatus.Total),{
+            Position=UDim2.fromOffset(12,8),Size=UDim2.new(1,-24,0,20),TextSize=15,Font=Enum.Font.GothamSemibold})
+        uiText(report,string.format("Unverified: %d  |  Rejected: %d  |  Mismatch: %d  |  Not attempted: %d",fastFlagStatus.Unverified,fastFlagStatus.Rejected,fastFlagStatus.Mismatched,fastFlagStatus.NotAttempted),{
+            Position=UDim2.fromOffset(12,34),Size=UDim2.new(1,-24,0,24),TextSize=10,TextWrapped=true})
+        local list = uiNew("ScrollingFrame",{Name="StartupRows",Position=UDim2.fromOffset(22,158),Size=UDim2.new(1,-44,1,-212),
+            BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=3,AutomaticCanvasSize=Enum.AutomaticSize.Y,
+            CanvasSize=UDim2.fromOffset(0,0)},perf.diagnostics)
+        uiNew("UIListLayout",{SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,5)},list)
+        for index,name in ipairs(fastFlagNames) do
+            local state = tostring(fastFlagStatus.Results[name] or "UNKNOWN")
+            local row=uiCard(list,"Flag"..index,UDim2.new(),UDim2.new(1,-8,0,53))
+            row.LayoutOrder=index
+            uiText(row,name,{Position=UDim2.fromOffset(10,5),Size=UDim2.new(1,-20,0,18),TextSize=10})
+            uiText(row,"Requested: "..tostring(V4wareFastFlags[name]).."  |  "..state,{
+                Position=UDim2.fromOffset(10,25),Size=UDim2.new(1,-20,0,24),TextSize=9,TextWrapped=true,
+                TextColor3=state=="VERIFIED" and Color3.fromRGB(111,207,151) or Color3.fromRGB(226,185,112)})
+        end
+        uiText(perf.diagnostics,"Readback does not prove an in-game effect. Results are from startup.",{
+            Position=UDim2.new(0,22,1,-48),Size=UDim2.new(1,-44,0,36),TextSize=9,TextWrapped=true,
+            TextColor3=Color3.fromRGB(143,160,180)})
     end
 
     -- Spread tuning panel. Values are written back to the existing Config table.
@@ -2789,6 +2950,46 @@ local function buildMenu()
         Size = UDim2.fromOffset(148, 34),
     })
 
+    do
+        perf.toastButton = uiButton(settingsPage, perf.toastEnabled and "TOASTS ON" or "TOASTS OFF", {
+            Position = UDim2.fromOffset(180, 290), Size = UDim2.fromOffset(136, 34),
+        })
+        perf.toastButton.Activated:Connect(function()
+            perf.toastEnabled = not perf.toastEnabled
+            perf.toastButton.Text = perf.toastEnabled and "TOASTS ON" or "TOASTS OFF"
+            perf.updateHUD()
+            if reportProfileSave then reportProfileSave() end
+            if pushActivity then pushActivity("Notifications",perf.toastEnabled and "Toasts enabled." or "Toasts disabled.","info") end
+        end)
+        local center = uiButton(settingsPage, "CENTER PANEL", {
+            Position = UDim2.fromOffset(326, 290), Size = UDim2.fromOffset(132, 34), TextSize = 10,
+        })
+        center.Activated:Connect(function()
+            menuPanel.Position = UDim2.fromScale(0.5, 0.5)
+            if pushActivity then pushActivity("Panel centered", "Window position restored.", "info") end
+        end)
+        local unload = uiButton(settingsPage, "UNLOAD", {
+            Position = UDim2.fromOffset(468, 290), Size = UDim2.fromOffset(130, 34), TextSize = 10,
+            TextColor3 = Color3.fromRGB(224, 119, 119),
+        })
+        local armedAt = nil
+        unload.Activated:Connect(function()
+            local now = os.clock()
+            if armedAt and now - armedAt <= 4 then
+                armedAt = nil
+                if type(env.DHC_Stop) == "function" then env.DHC_Stop() end
+                return
+            end
+            armedAt = now
+            unload.Text = "CONFIRM UNLOAD"
+            task.delay(4, function()
+                if running and unload.Parent and armedAt == now then
+                    armedAt = nil
+                    unload.Text = "UNLOAD"
+                end
+            end)
+        end)
+    end
     local profileCard = uiCard(settingsPage, "UIProfile", UDim2.fromOffset(22, 334), UDim2.new(1, -44, 0, 116))
     uiText(profileCard, "UI PROFILE", {
         Position = UDim2.fromOffset(15, 8),
@@ -2978,6 +3179,7 @@ local function buildMenu()
             if oldest and oldest.Parent then oldest:Destroy() end
         end
         refreshActivityFilter()
+        if title ~= "Panel opened" and title ~= "Panel closed" then perf.showToast(title, detail, kind) end
     end
     env.V4wareNotify = function(title, detail, kind)
         if pushActivity then pushActivity(title, detail, kind) end
@@ -3034,6 +3236,9 @@ local function buildMenu()
             if pushActivity then pushActivity("UI profile not found", "Save a profile first.", "info") end
             return
         end
+        if not monitorEnabled then perf.cancelBenchmark("Loaded a paused monitor profile.") end
+        perf.updateHUD()
+        if perf.toastButton then perf.toastButton.Text = perf.toastEnabled and "TOASTS ON" or "TOASTS OFF" end
         panelScale.Scale = uiScaleValue
         menuPanel.Size = compactMode and UDim2.fromOffset(820, 550) or UDim2.fromOffset(880, 580)
         monitorToggle.Text = monitorEnabled and "ON" or "OFF"
@@ -3056,6 +3261,9 @@ local function buildMenu()
         monitorEnabled = true
         panelKey = Enum.KeyCode.Insert
         uiScaleValue = 1
+        perf.hudEnabled, perf.toastEnabled = false, false
+        perf.updateHUD()
+        if perf.toastButton then perf.toastButton.Text = "TOASTS OFF" end
         panelScale.Scale = uiScaleValue
         menuPanel.Size = UDim2.fromOffset(880, 580)
         monitorToggle.Text = "ON"
@@ -3081,6 +3289,8 @@ local function buildMenu()
 
     monitorToggle.Activated:Connect(function()
         monitorEnabled = not monitorEnabled
+        if not monitorEnabled then perf.cancelBenchmark("Telemetry paused.") end
+        perf.updateHUD()
         monitorToggle.Text = monitorEnabled and "ON" or "OFF"
         monitorToggle.TextColor3 = monitorEnabled and Color3.fromRGB(111, 207, 151) or Color3.fromRGB(160, 166, 176)
         if updateSystemMonitor then updateSystemMonitor() end
@@ -3300,9 +3510,6 @@ local function buildMenu()
             dragging = true
             dragOrigin = input.Position
             startPosition = menuPanel.Position
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then dragging = false end
-            end)
         end
     end)
     connectSignal(UserInputService.InputChanged, function(input)
@@ -3334,6 +3541,9 @@ local function buildMenu()
     end)
 
     close.Activated:Connect(function()
+        capturingPanelKey = false
+        if panelKeyButton then panelKeyButton.Text = panelKey.Name:upper() end
+        dragging = false
         menuVisible = false
         if menuGui then menuGui.Enabled = false end
         if syncFPSCounter then syncFPSCounter() end
@@ -3343,18 +3553,17 @@ local function buildMenu()
 end
 
 buildMenu()
-if pushActivity then pushActivity("V4WARE V21.2 ready", "Utility dashboard initialized.", "success") end
+if pushActivity then pushActivity("V4WARE V21.3 ready", "Utility dashboard initialized.", "success") end
 
 -- FPS sampler sob demanda: não mantém callback RenderStepped quando o monitor
 -- não está visível/ativo. A medição continua com janela de 1 segundo.
 syncFPSCounter = function()
     local shouldSample = running
-        and menuVisible
-        and menuBodyVisible
-        and menuGui ~= nil
-        and menuGui.Enabled
-        and (selectedTab == "system" or selectedTab == "overview")
         and monitorEnabled
+        and menuGui ~= nil
+        and ((menuVisible and menuBodyVisible and menuGui.Enabled
+            and (selectedTab == "system" or selectedTab == "overview"))
+            or perf.hudEnabled or perf.benchmark ~= nil)
 
     if shouldSample then
         if not fpsCounterConnection then
@@ -3365,10 +3574,11 @@ syncFPSCounter = function()
                 fpsFrameCount = fpsFrameCount + 1
                 fpsElapsed = fpsElapsed + dt
                 if fpsElapsed >= 1 then
-                    currentFPS = math.floor((fpsFrameCount / fpsElapsed) + 0.5)
+                    local frames, elapsed = fpsFrameCount, fpsElapsed
+                    currentFPS = math.floor((frames / elapsed) + 0.5)
                     fpsSampleAt = os.clock()
-                    fpsFrameCount = 0
-                    fpsElapsed = 0
+                    fpsFrameCount, fpsElapsed = 0, 0
+                    perf.record(frames, elapsed)
                 end
             end)
         end
@@ -3385,7 +3595,7 @@ syncFPSCounter()
 
 connectSignal(UserInputService.InputBegan, function(input, processed)
     if capturingPanelKey and input.UserInputType == Enum.UserInputType.Keyboard then
-        if input.KeyCode == Enum.KeyCode.Escape then
+        if input.KeyCode == Enum.KeyCode.Escape or input.KeyCode == Enum.KeyCode.Unknown then
             capturingPanelKey = false
             if panelKeyButton then panelKeyButton.Text = panelKey.Name:upper() end
             return
@@ -3473,6 +3683,10 @@ local function stop()
         pcall(function() fpsCounterConnection:Disconnect() end)
         fpsCounterConnection = nil
     end
+    perf.benchmark = nil
+    perf.toastToken = perf.toastToken + 1
+    if perf.overlay and perf.overlay.Parent then perf.overlay:Destroy() end
+    perf.overlay = nil
     stopSpectating()
     if menuGui and menuGui.Parent then menuGui:Destroy() end
     menuGui = nil
@@ -3485,7 +3699,7 @@ local function stop()
     if env.DHC_Stop == stop then env.DHC_Stop = nil end
     if env.DHC_Status == status then env.DHC_Status = nil end
     if env.V4wareNotify then env.V4wareNotify = nil end
-    print("[V4ware V21.2] Parado; interface encerrada e conexoes limpas.")
+    print("[V4ware V21.3] Parado; interface encerrada e conexoes limpas.")
 end
 
 env.DHC_Stop = stop
@@ -3493,8 +3707,8 @@ env.DHC_Status = status
 refreshESP()
 updateHitboxes()
 updateSpread()
-print("[V4ware V21.2] Iniciado: painel (Overview / Players / Spread / Hitbox / System / Settings / Activity) | preferencias visuais separadas")
+print("[V4ware V21.3] Iniciado: painel (Overview / Players / Spread / Hitbox / System / Settings / Activity / Diagnostics) | preferencias visuais separadas")
 print("[V4ware V20] Trigger: delay cliente 0 | DB 180 | Revolver 260 | Tactical 180 | limite geral 280 studs")
-print("[V4ware V21.2] Menu: atalho configuravel | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
+print("[V4ware V21.3] Menu: atalho configuravel | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
 warn("[V4ware V20] Experimento de patch de CONSTANTES especificas. Sem hook FireServer; resultado real nao testado.")
 print("[V4ware WS] Weapon Switch ativo: V -> DB / Tactical / Revolver, respeitando cooldowns do jogo")
