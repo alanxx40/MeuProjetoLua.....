@@ -1,6 +1,130 @@
--- V4WARE V20.4 - ESP 0.1s + UI MONITOR OTIMIZADO (base V20.2 preservada, Config separada)
+-- V4WARE V20.5 - FASTFLAGS LUA INTEGRADAS (base V20.4 preservada, Config separada)
 -- Este arquivo pressupoe que a tabela global Config ja existe no ambiente que o carrega.
 -- Mantenha a configuracao no arquivo/trecho local e hospede este arquivo como Main.lua.
+-- =============================================================
+-- V4WARE FASTFLAGS: VALORES CONVERTIDOS PARA LUA E APLICACAO VIA EXECUTOR
+-- Executado antes dos modulos do V4WARE. Nao consulta lista externa de flags.
+-- =============================================================
+local env = (type(getgenv) == "function" and getgenv()) or _G
+
+local V4wareFastFlags = {
+    ["FFlagAuroraRollbackAttributeChangedSignals"] = false,
+    ["DFIntMaxFrameBufferSize"] = 4,
+    ["DFIntRenderingThrottleDelayInMS"] = 0,
+    ["FFlagGameBasicSettingsFramerateCap5"] = false,
+    ["DFIntTaskSchedulerTargetFps"] = 500,
+    ["FFlagApplicationFrameRatePolicy3"] = false,
+    ["FFlagApplicationFrameRateClampToDisplay"] = false,
+    ["FLogApplicationFrameRate"] = 0,
+    ["FIntActivatedCountTimerMSGamepad"] = 1,
+    ["DFLogAuroraRollback"] = 1,
+    ["DFIntAuroraClientInputBufferSize"] = 3,
+    ["FFlagAckPaceEnabled"] = false,
+    ["FIntAckPaceRttFloorMs"] = 0,
+    ["FFlagDebugSkyGray"] = true,
+    ["DFIntDebugFRMQualityLevelOverride"] = 1,
+    ["FIntDebugForceMSAASamples"] = -1,
+    ["DFIntDataSenderRate"] = 220,
+    ["DFIntS2PhysicsSenderRate"] = 220,
+    ["FIntActivatedCountTimerMSKeyboard"] = 1,
+    ["FIntActivatedCountTimerMSMouse"] = 1,
+    ["DFIntAuroraInputLatencySmoothTimeMillisecondsDownwards"] = 100,
+    ["DFIntAuroraInputFrameCount"] = 3,
+    ["DFIntAuroraInputLatencySmoothTimeMillisecondsUpwards"] = 100,
+}
+
+env.V4wareFastFlags = V4wareFastFlags
+
+local fastFlagNames = {}
+for flagName in pairs(V4wareFastFlags) do
+    table.insert(fastFlagNames, flagName)
+end
+table.sort(fastFlagNames)
+
+local setFastFlag = env.setfflag
+if type(setFastFlag) ~= "function" and type(_G) == "table" then
+    setFastFlag = _G.setfflag
+end
+if type(setFastFlag) ~= "function" and type(setfflag) == "function" then
+    setFastFlag = setfflag
+end
+
+local getFastFlag = env.getfflag
+if type(getFastFlag) ~= "function" and type(_G) == "table" then
+    getFastFlag = _G.getfflag
+end
+if type(getFastFlag) ~= "function" and type(getfflag) == "function" then
+    getFastFlag = getfflag
+end
+
+local fastFlagStatus = {
+    Available = type(setFastFlag) == "function",
+    ReadbackAvailable = type(getFastFlag) == "function",
+    Total = #fastFlagNames,
+    Accepted = 0,
+    Verified = 0,
+    Unverified = 0,
+    Mismatched = 0,
+    Rejected = 0,
+    NotAttempted = 0,
+    Results = {},
+}
+
+if fastFlagStatus.Available then
+    for _, flagName in ipairs(fastFlagNames) do
+        local flagValue = V4wareFastFlags[flagName]
+        local expectedValue = string.lower(tostring(flagValue))
+        local ok, result = pcall(setFastFlag, flagName, tostring(flagValue))
+
+        if ok and result ~= false then
+            fastFlagStatus.Accepted = fastFlagStatus.Accepted + 1
+            if fastFlagStatus.ReadbackAvailable then
+                local readOk, currentValue = pcall(getFastFlag, flagName)
+                if readOk and currentValue ~= nil then
+                    if string.lower(tostring(currentValue)) == expectedValue then
+                        fastFlagStatus.Verified = fastFlagStatus.Verified + 1
+                        fastFlagStatus.Results[flagName] = "VERIFIED"
+                    else
+                        fastFlagStatus.Mismatched = fastFlagStatus.Mismatched + 1
+                        fastFlagStatus.Results[flagName] = "VALUE_MISMATCH: " .. tostring(currentValue)
+                    end
+                else
+                    fastFlagStatus.Unverified = fastFlagStatus.Unverified + 1
+                    fastFlagStatus.Results[flagName] = "REQUEST_SENT_UNVERIFIED"
+                end
+            else
+                fastFlagStatus.Unverified = fastFlagStatus.Unverified + 1
+                fastFlagStatus.Results[flagName] = "REQUEST_SENT_UNVERIFIED"
+            end
+        else
+            fastFlagStatus.Rejected = fastFlagStatus.Rejected + 1
+            fastFlagStatus.Results[flagName] = ok and "REJECTED_BY_EXECUTOR" or ("ERROR: " .. tostring(result))
+        end
+    end
+else
+    fastFlagStatus.NotAttempted = fastFlagStatus.Total
+    for _, flagName in ipairs(fastFlagNames) do
+        fastFlagStatus.Results[flagName] = "SETFFLAG_UNAVAILABLE"
+    end
+end
+
+env.DHC_FastFlagsStatus = function()
+    return fastFlagStatus
+end
+
+if not fastFlagStatus.Available then
+    warn("[V4ware FastFlags] setfflag indisponivel. As 23 flags foram carregadas em Lua, mas nenhuma foi enviada ao cliente.")
+else
+    print(string.format(
+        "[V4ware FastFlags] %d/%d requisicoes aceitas; %d verificadas por leitura; %d sem verificacao; %d rejeitadas. Consulte getgenv().DHC_FastFlagsStatus().",
+        fastFlagStatus.Accepted,
+        fastFlagStatus.Total,
+        fastFlagStatus.Verified,
+        fastFlagStatus.Unverified,
+        fastFlagStatus.Rejected
+    ))
+end
+
 
 -- =============================================================
 -- SERVICOS, ESTADO E LIMPEZA DE EXECUCOES ANTERIORES
@@ -13,7 +137,6 @@ local Workspace = game:GetService("Workspace")
 local Stats = game:GetService("Stats")
 local LocalPlayer = Players.LocalPlayer
 local sessionStartedAt = os.clock()
-local env = (type(getgenv) == "function" and getgenv()) or _G
 
 local oldCfg = env.DHC_Config
 if type(env.DHC_Stop) == "function" then
@@ -1290,7 +1413,7 @@ local function status()
     local localMatches = {}
     for name, count in pairs(spreadMatches) do localMatches[name] = count end
     return {
-        Version = 20.4,
+        Version = 20.5,
         Running = running,
         InfiniteJump = false,
         NoJumpCooldown = Config.Movement["No Jump Cooldown"],
@@ -1357,6 +1480,15 @@ local function status()
         WeaponSwitchLastResult = weaponSwitchLastResult,
         WeaponSwitchLastError = weaponSwitchLastError,
         SpreadRealVerified = false, -- validacao de dano/trajetoria do servidor nao foi testada
+        FastFlagsAvailable = fastFlagStatus.Available,
+        FastFlagsTotal = fastFlagStatus.Total,
+        FastFlagsAccepted = fastFlagStatus.Accepted,
+        FastFlagsVerified = fastFlagStatus.Verified,
+        FastFlagsUnverified = fastFlagStatus.Unverified,
+        FastFlagsMismatched = fastFlagStatus.Mismatched,
+        FastFlagsRejected = fastFlagStatus.Rejected,
+        FastFlagsNotAttempted = fastFlagStatus.NotAttempted,
+        FastFlagsResults = fastFlagStatus.Results,
         RemoteHooks = false,
     }
 end
@@ -1668,7 +1800,7 @@ local function buildMenu()
         TextSize = 18,
         TextColor3 = Color3.fromRGB(241, 244, 249),
     })
-    uiText(header, "CLEAN CONTROL CENTER  •  V20.1", {
+    uiText(header, "CLEAN CONTROL CENTER  •  V20.5", {
         Position = UDim2.fromOffset(67, 35),
         Size = UDim2.fromOffset(240, 14),
         Font = Enum.Font.GothamMedium,
@@ -1756,7 +1888,7 @@ local function buildMenu()
         TextSize = 8,
         TextColor3 = Color3.fromRGB(101, 112, 127),
     })
-    uiText(footer, "V20.1  •  PREMIUM", {
+    uiText(footer, "V20.5  •  PREMIUM", {
         Position = UDim2.fromOffset(9, 17),
         Size = UDim2.new(1, -18, 0, 15),
         Font = Enum.Font.GothamMedium,
@@ -2882,7 +3014,7 @@ local function stop()
     restoreSpread()
     if env.DHC_Stop == stop then env.DHC_Stop = nil end
     if env.DHC_Status == status then env.DHC_Status = nil end
-    print("[V4ware V20.4] Parado; menu fechado e constantes restauradas onde possivel.")
+    print("[V4ware V20.5] Parado; menu fechado e constantes restauradas onde possivel.")
 end
 
 env.DHC_Stop = stop
@@ -2890,8 +3022,8 @@ env.DHC_Status = status
 refreshESP()
 updateHitboxes()
 updateSpread()
-print("[V4ware V20.4] Iniciado: INSERT menu (Overview / Players / Spread / Hitbox / System / Settings) | Pulo somente COM OS PES APOIADOS; sem buffer, sem voo e sem cooldown artificial")
+print("[V4ware V20.5] Iniciado: INSERT menu (Overview / Players / Spread / Hitbox / System / Settings) | Pulo somente COM OS PES APOIADOS; sem buffer, sem voo e sem cooldown artificial")
 print("[V4ware V20] Trigger: delay cliente 0 | DB 180 | Revolver 260 | Tactical 180 | limite geral 280 studs")
-print("[V4ware V20.4] Menu: INSERT | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
+print("[V4ware V20.5] Menu: INSERT | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
 warn("[V4ware V20] Experimento de patch de CONSTANTES especificas. Sem hook FireServer; resultado real nao testado.")
 print("[V4ware WS] Weapon Switch ativo: V -> DB / Tactical / Revolver, respeitando cooldowns do jogo")
