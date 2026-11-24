@@ -1,4 +1,4 @@
--- V4WARE V20.5 - FASTFLAGS LUA INTEGRADAS (base V20.4 preservada, Config separada)
+-- V4WARE V21.0 - UTILITY DASHBOARD (base V20.5, preferencias de UI separadas)
 -- Este arquivo pressupoe que a tabela global Config ja existe no ambiente que o carrega.
 -- Mantenha a configuracao no arquivo/trecho local e hospede este arquivo como Main.lua.
 -- =============================================================
@@ -135,6 +135,7 @@ local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 local Stats = game:GetService("Stats")
+local HttpService = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
 local sessionStartedAt = os.clock()
 
@@ -1513,10 +1514,11 @@ end
 
 
 -- =============================================================
--- V4WARE V20 PREMIUM HUB
--- Interface redesenhada sobre a base V19; modulos principais preservados.
+-- V4WARE V21.0 UTILITY DASHBOARD
+-- Dashboard, telemetria e preferencias visuais; modulos de jogo fora do escopo desta atualizacao.
 -- =============================================================
 local menuGui, menuPanel, menuPlayers, menuCount, tabWhitelist, tabIncognito, tabSystem, monitorFrame
+local activityPage, activityList, activityCountLabel
 local panelScale
 local selectedTab = "overview"
 local selectedPlayerTab = "whitelist"
@@ -1535,6 +1537,12 @@ local dashboardRefreshElapsed = 0
 local monitorEnabled = true
 local compactMode = false
 local panelKey = Enum.KeyCode.Insert
+local panelKeyButton = nil
+local capturingPanelKey = false
+local uiScaleValue = 1
+local pushActivity = nil
+local activityRows = {}
+local avatarThumbnailCache = {}
 local accentColor = Color3.fromRGB(160, 190, 222)
 local accentChoices = {
     Color3.fromRGB(160, 190, 222),
@@ -1542,6 +1550,65 @@ local accentChoices = {
     Color3.fromRGB(180, 166, 225),
 }
 local accentIndex = 1
+local UI_PROFILE_PATH = "V4ware_UI_Profile.json"
+
+local function sanitizeUIPreferences(data)
+    if type(data) ~= "table" then return nil end
+    local keyName = tostring(data.PanelKey or "Insert")
+    local keyCode = Enum.KeyCode.Insert
+    local keyOk, resolvedKey = pcall(function() return Enum.KeyCode[keyName] end)
+    if keyOk and resolvedKey then keyCode = resolvedKey end
+    return {
+        AccentIndex = math.clamp(math.floor(tonumber(data.AccentIndex) or 1), 1, #accentChoices),
+        CompactMode = data.CompactMode == true,
+        MonitorEnabled = data.MonitorEnabled ~= false,
+        PanelKey = keyCode,
+        UIScale = math.clamp(tonumber(data.UIScale) or 1, 0.85, 1.10),
+    }
+end
+
+local function loadUIPreferences()
+    local stored = nil
+    if type(readfile) == "function" then
+        local readOk, raw = pcall(readfile, UI_PROFILE_PATH)
+        if readOk and type(raw) == "string" then
+            local decodeOk, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
+            if decodeOk then stored = decoded end
+        end
+    end
+    if type(stored) ~= "table" then stored = env.V4wareUIPrefs end
+    local clean = sanitizeUIPreferences(stored)
+    if not clean then return false end
+    accentIndex = clean.AccentIndex
+    compactMode = clean.CompactMode
+    monitorEnabled = clean.MonitorEnabled
+    panelKey = clean.PanelKey
+    uiScaleValue = clean.UIScale
+    accentColor = accentChoices[accentIndex]
+    return true
+end
+
+local function saveUIPreferences()
+    local data = {
+        Version = 1,
+        AccentIndex = accentIndex,
+        CompactMode = compactMode,
+        MonitorEnabled = monitorEnabled,
+        PanelKey = panelKey.Name,
+        UIScale = uiScaleValue,
+    }
+    env.V4wareUIPrefs = data
+    if type(writefile) == "function" then
+        local encodeOk, encoded = pcall(function() return HttpService:JSONEncode(data) end)
+        if not encodeOk then return false, "JSON_ENCODE_FAILED" end
+        local writeOk, writeErr = pcall(writefile, UI_PROFILE_PATH, encoded)
+        if not writeOk then return false, tostring(writeErr) end
+        return true, "FILE"
+    end
+    return true, "SESSION_ONLY"
+end
+
+loadUIPreferences()
 
 local function restoreOwnCamera()
     local cam = camera()
@@ -1751,14 +1818,14 @@ local function buildMenu()
 
     menuPanel = uiNew("Frame", {
         Name = "Panel",
-        Size = UDim2.fromOffset(880, 580),
+        Size = compactMode and UDim2.fromOffset(820, 550) or UDim2.fromOffset(880, 580),
         AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.fromScale(0.5, 0.5),
         BackgroundColor3 = Color3.fromRGB(9, 14, 22),
         BorderSizePixel = 0,
         Active = true,
     }, menuGui)
-    panelScale = uiNew("UIScale", {Scale = 1}, menuPanel)
+    panelScale = uiNew("UIScale", {Scale = uiScaleValue}, menuPanel)
     uiNew("UICorner", {CornerRadius = UDim.new(0, 14)}, menuPanel)
     uiNew("UIStroke", {Color = Color3.fromRGB(38, 58, 81), Thickness = 1}, menuPanel)
     uiNew("UISizeConstraint", {
@@ -1805,7 +1872,7 @@ local function buildMenu()
         TextSize = 19,
         TextColor3 = Color3.fromRGB(244, 248, 255),
     })
-    uiText(header, "CLEAN CONTROL CENTER  •  V20.5", {
+    uiText(header, "UTILITY CONTROL CENTER  •  V21.0", {
         Position = UDim2.fromOffset(75, 40),
         Size = UDim2.fromOffset(270, 15),
         Font = Enum.Font.GothamMedium,
@@ -1877,7 +1944,7 @@ local function buildMenu()
     local nav = uiNew("Frame", {
         Name = "Navigation",
         Position = UDim2.fromOffset(10, 49),
-        Size = UDim2.new(1, -20, 0, 310),
+        Size = UDim2.new(1, -20, 0, 360),
         BackgroundTransparency = 1,
     }, sidebar)
     uiNew("UIListLayout", {
@@ -1893,7 +1960,7 @@ local function buildMenu()
         TextSize = 8,
         TextColor3 = Color3.fromRGB(113, 132, 154),
     })
-    uiText(footer, "V20.5  •  PREMIUM", {
+    uiText(footer, "V21.0  •  UTILITY", {
         Position = UDim2.fromOffset(10, 22),
         Size = UDim2.new(1, -20, 0, 16),
         Font = Enum.Font.GothamMedium,
@@ -1928,6 +1995,7 @@ local function buildMenu()
     local spreadPage = makePage("Spread")
     local hitboxPage = makePage("Hitbox")
     local settingsPage = makePage("Settings")
+    activityPage = makePage("Activity")
 
     local function heading(parent, title, subtitle)
         local headingMarker = uiNew("Frame", {
@@ -2033,6 +2101,7 @@ local function buildMenu()
     navItem("Hitbox", "Hitbox settings", "▣", 4)
     navItem("System", "Performance", "◫", 5)
     navItem("Settings", "Preferences", "⚙", 6)
+    navItem("Activity", "Notifications / history", "◷", 7)
 
     local function metricCard(parent, key, title, x, y, width)
         local card = uiCard(parent, key, UDim2.fromOffset(x, y), UDim2.fromOffset(width, 88))
@@ -2052,27 +2121,49 @@ local function buildMenu()
         })
     end
 
-    -- Overview dashboard: mostra o estado da configuracao, sem criar loops por modulo.
-    heading(overviewPage, "Overview", "Status geral da V4ware e da sessao atual.")
+    -- Overview V21.0: telemetria resumida + status visual dos modulos.
+    heading(overviewPage, "Overview", "Resumo da sessao, desempenho local e estado dos modulos.")
+    local dashboardMetrics = {}
+    local function dashboardMetric(key, title, x)
+        local card = uiCard(overviewPage, "Metric_" .. key, UDim2.fromOffset(x, 82), UDim2.fromOffset(210, 72))
+        uiText(card, title:upper(), {
+            Position = UDim2.fromOffset(13, 9),
+            Size = UDim2.new(1, -26, 0, 13),
+            Font = Enum.Font.GothamBold,
+            TextSize = 8,
+            TextColor3 = Color3.fromRGB(145, 164, 186),
+        })
+        dashboardMetrics[key] = uiText(card, "--", {
+            Position = UDim2.fromOffset(13, 29),
+            Size = UDim2.new(1, -26, 0, 29),
+            Font = Enum.Font.GothamSemibold,
+            TextSize = 20,
+            TextColor3 = Color3.fromRGB(244, 248, 255),
+        })
+    end
+    dashboardMetric("FPS", "Frame rate", 22)
+    dashboardMetric("Ping", "Network ping", 246)
+    dashboardMetric("Memory", "Client memory", 470)
+
     local featureCards = {}
     local function featureCard(key, title, x, y)
-        local card = uiCard(overviewPage, key, UDim2.fromOffset(x, y), UDim2.fromOffset(294, 62))
+        local card = uiCard(overviewPage, key, UDim2.fromOffset(x, y), UDim2.fromOffset(294, 52))
         local dotFeature = uiNew("Frame", {
-            Position = UDim2.fromOffset(15, 27),
+            Position = UDim2.fromOffset(15, 22),
             Size = UDim2.fromOffset(7, 7),
             BackgroundColor3 = Color3.fromRGB(105, 113, 124),
             BorderSizePixel = 0,
         }, card)
         uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, dotFeature)
         uiText(card, title, {
-            Position = UDim2.fromOffset(34, 9),
+            Position = UDim2.fromOffset(34, 6),
             Size = UDim2.new(1, -112, 0, 20),
             Font = Enum.Font.GothamMedium,
             TextSize = 10,
             TextColor3 = Color3.fromRGB(225, 235, 247),
         })
         local value = uiText(card, "OFF", {
-            Position = UDim2.new(1, -78, 0, 9),
+            Position = UDim2.new(1, -78, 0, 6),
             Size = UDim2.fromOffset(62, 20),
             Font = Enum.Font.GothamBold,
             TextSize = 9,
@@ -2082,32 +2173,31 @@ local function buildMenu()
         featureCards[key] = {value = value, dot = dotFeature}
     end
 
-    featureCard("Triggerbot", "Triggerbot", 22, 82)
-    featureCard("InfiniteJump", "Infinite Jump", 326, 82)
-    featureCard("ESP", "ESP", 22, 154)
-    featureCard("Camlock", "Camlock", 326, 154)
-    featureCard("Hitbox", "Hitbox Expander", 22, 226)
-    featureCard("Spread", "Spread Modification", 326, 226)
+    featureCard("Triggerbot", "Triggerbot", 22, 170)
+    featureCard("InfiniteJump", "Infinite Jump", 326, 170)
+    featureCard("ESP", "ESP", 22, 228)
+    featureCard("Camlock", "Camlock", 326, 228)
+    featureCard("Hitbox", "Hitbox Expander", 22, 286)
+    featureCard("Spread", "Spread Modification", 326, 286)
+    featureCard("WeaponSwitch", "Weapon Switch", 22, 344)
 
-    featureCard("WeaponSwitch", "Weapon Switch", 22, 298)
-
-    local overviewBottom = uiCard(overviewPage, "OverviewSession", UDim2.fromOffset(22, 378), UDim2.new(1, -44, 0, 82))
+    local overviewBottom = uiCard(overviewPage, "OverviewSession", UDim2.fromOffset(22, 412), UDim2.new(1, -44, 0, 70))
     uiText(overviewBottom, "SESSION", {
-        Position = UDim2.fromOffset(15, 10),
+        Position = UDim2.fromOffset(15, 8),
         Size = UDim2.new(1, -30, 0, 13),
         Font = Enum.Font.GothamBold,
         TextSize = 8,
         TextColor3 = Color3.fromRGB(145, 164, 186),
     })
     local overviewSession = uiText(overviewBottom, "ONLINE  •  INSERT TO OPEN / CLOSE", {
-        Position = UDim2.fromOffset(15, 30),
+        Position = UDim2.fromOffset(15, 26),
         Size = UDim2.new(1, -30, 0, 18),
         Font = Enum.Font.GothamSemibold,
         TextSize = 10,
         TextColor3 = Color3.fromRGB(231, 236, 244),
     })
     local overviewUptime = uiText(overviewBottom, "Session 00:00:00", {
-        Position = UDim2.fromOffset(15, 54),
+        Position = UDim2.fromOffset(15, 48),
         Size = UDim2.new(1, -30, 0, 14),
         Font = Enum.Font.Gotham,
         TextSize = 9,
@@ -2131,6 +2221,17 @@ local function buildMenu()
         setFeature("Hitbox", Config.HitboxExpander and Config.HitboxExpander.Enabled, true)
         setFeature("Spread", Config.SpreadModification and Config.SpreadModification.Enabled, true)
         setFeature("WeaponSwitch", weaponSwitchConfig().Enabled, true)
+        if monitorEnabled then
+            dashboardMetrics.FPS.Text = currentFPS > 0 and tostring(currentFPS) or "--"
+            local dashboardPing = readPingMs()
+            dashboardMetrics.Ping.Text = dashboardPing and string.format("%.0f ms", dashboardPing) or "N/A"
+            local dashboardMemory = readMemoryMb()
+            dashboardMetrics.Memory.Text = dashboardMemory and string.format("%.0f MB", dashboardMemory) or "N/A"
+        else
+            dashboardMetrics.FPS.Text = "PAUSED"
+            dashboardMetrics.Ping.Text = "PAUSED"
+            dashboardMetrics.Memory.Text = "PAUSED"
+        end
         overviewUptime.Text = "Session " .. formatDuration(os.clock() - sessionStartedAt)
     end
 
@@ -2211,7 +2312,9 @@ local function buildMenu()
         local memory = readMemoryMb()
         monitorValues.Memory.Text = memory and string.format("%.0f MB", memory) or "N/A"
         monitorValues.Players.Text = tostring(#Players:GetPlayers())
-        monitorValues.Status.Text = monitorEnabled and "ONLINE  •  CLIENT MONITOR ACTIVE" or "MONITOR PAUSED"
+        local performanceLabel = currentFPS >= 120 and "GOOD"
+            or (currentFPS >= 60 and "NORMAL" or (currentFPS > 0 and "LOW" or "WARMING UP"))
+        monitorValues.Status.Text = monitorEnabled and ("ONLINE  •  " .. performanceLabel .. " PERFORMANCE") or "MONITOR PAUSED"
         monitorValues.Uptime.Text = "Session  " .. formatDuration(os.clock() - sessionStartedAt)
     end
 
@@ -2602,7 +2705,7 @@ local function buildMenu()
         TextSize = 9,
         TextColor3 = Color3.fromRGB(143, 160, 180),
     })
-    local monitorToggle = uiButton(settingsCard, "ON", {
+    local monitorToggle = uiButton(settingsCard, monitorEnabled and "ON" or "OFF", {
         Position = UDim2.new(1, -98, 0, 23),
         Size = UDim2.fromOffset(80, 30),
     })
@@ -2619,22 +2722,176 @@ local function buildMenu()
         TextSize = 9,
         TextColor3 = Color3.fromRGB(143, 160, 180),
     })
-    local compactToggle = uiButton(settingsCard, "OFF", {
+    local compactToggle = uiButton(settingsCard, compactMode and "ON" or "OFF", {
         Position = UDim2.new(1, -98, 0, 118),
         Size = UDim2.fromOffset(80, 30),
     })
+    local panelKeyLabel = uiText(settingsCard, "MENU SHORTCUT", {
+        Position = UDim2.fromOffset(16, 158),
+        Size = UDim2.new(1, -160, 0, 18),
+        Font = Enum.Font.GothamSemibold,
+        TextSize = 10,
+    })
+    panelKeyButton = uiButton(settingsCard, panelKey.Name:upper(), {
+        Position = UDim2.new(1, -98, 0, 151),
+        Size = UDim2.fromOffset(80, 30),
+        TextSize = 9,
+    })
     local accentButton = uiButton(settingsPage, "CHANGE ACCENT", {
-        Position = UDim2.fromOffset(22, 312),
+        Position = UDim2.fromOffset(22, 292),
         Size = UDim2.fromOffset(148, 34),
     })
-    local settingsNote = uiText(settingsPage, "Panel shortcut: INSERT  •  No blur  •  No animated graphs  •  Low-frequency monitor", {
-        Position = UDim2.fromOffset(24, 362),
-        Size = UDim2.new(1, -48, 0, 44),
+
+    local profileCard = uiCard(settingsPage, "UIProfile", UDim2.fromOffset(22, 338), UDim2.new(1, -44, 0, 116))
+    uiText(profileCard, "UI PROFILE", {
+        Position = UDim2.fromOffset(15, 8),
+        Size = UDim2.new(1, -30, 0, 16),
+        Font = Enum.Font.GothamSemibold,
+        TextSize = 10,
+    })
+    uiText(profileCard, "Saves only panel appearance and interface preferences.", {
+        Position = UDim2.fromOffset(15, 25),
+        Size = UDim2.new(1, -30, 0, 14),
         Font = Enum.Font.Gotham,
+        TextSize = 8,
+        TextColor3 = Color3.fromRGB(143, 160, 180),
+    })
+    local saveProfileButton = uiButton(profileCard, "SAVE", {
+        Position = UDim2.fromOffset(15, 48),
+        Size = UDim2.fromOffset(88, 28),
+    })
+    local loadProfileButton = uiButton(profileCard, "LOAD", {
+        Position = UDim2.fromOffset(111, 48),
+        Size = UDim2.fromOffset(88, 28),
+    })
+    local resetProfileButton = uiButton(profileCard, "RESET", {
+        Position = UDim2.fromOffset(207, 48),
+        Size = UDim2.fromOffset(88, 28),
+    })
+    local scaleLabel = uiText(profileCard, "UI SCALE", {
+        Position = UDim2.new(1, -194, 0, 51),
+        Size = UDim2.fromOffset(70, 22),
+        Font = Enum.Font.GothamSemibold,
+        TextSize = 8,
+        TextColor3 = Color3.fromRGB(143, 160, 180),
+    })
+    local scaleValueLabel = uiText(profileCard, string.format("%.2fx", uiScaleValue), {
+        Position = UDim2.new(1, -120, 0, 51),
+        Size = UDim2.fromOffset(42, 22),
+        Font = Enum.Font.GothamBold,
         TextSize = 9,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        TextColor3 = accentColor,
+    })
+    local scaleMinus = uiButton(profileCard, "−", {
+        Position = UDim2.new(1, -75, 0, 48),
+        Size = UDim2.fromOffset(25, 28),
+    })
+    local scalePlus = uiButton(profileCard, "+", {
+        Position = UDim2.new(1, -44, 0, 48),
+        Size = UDim2.fromOffset(25, 28),
+    })
+    local profileStatus = uiText(profileCard, "UI preferences only  •  no gameplay values are stored", {
+        Position = UDim2.fromOffset(15, 84),
+        Size = UDim2.new(1, -30, 0, 16),
+        Font = Enum.Font.Gotham,
+        TextSize = 8,
+        TextColor3 = Color3.fromRGB(143, 160, 180),
+    })
+    local settingsNote = uiText(settingsPage, "Panel shortcut is customizable  •  UI scale: 0.85x–1.10x  •  telemetry updates once per second", {
+        Position = UDim2.fromOffset(24, 466),
+        Size = UDim2.new(1, -48, 0, 22),
+        Font = Enum.Font.Gotham,
+        TextSize = 8,
         TextColor3 = Color3.fromRGB(143, 160, 180),
         TextWrapped = true,
     })
+
+    -- Activity center: event-driven history, capped at 30 entries.
+    heading(activityPage, "Activity center", "Notificacoes e eventos recentes da interface.")
+    activityCountLabel = uiText(activityPage, "00 EVENTS", {
+        Position = UDim2.fromOffset(24, 72),
+        Size = UDim2.fromOffset(110, 18),
+        Font = Enum.Font.GothamBold,
+        TextSize = 8,
+        TextColor3 = accentColor,
+    })
+    local clearActivityButton = uiButton(activityPage, "CLEAR HISTORY", {
+        Position = UDim2.new(1, -148, 0, 68),
+        Size = UDim2.fromOffset(124, 28),
+    })
+    activityList = uiNew("ScrollingFrame", {
+        Name = "ActivityList",
+        Position = UDim2.fromOffset(22, 104),
+        Size = UDim2.new(1, -44, 1, -126),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 3,
+        ScrollBarImageColor3 = Color3.fromRGB(89, 119, 151),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        CanvasSize = UDim2.fromOffset(0, 0),
+    }, activityPage)
+    uiNew("UIListLayout", {
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, 6),
+    }, activityList)
+
+    pushActivity = function(title, detail, kind)
+        if not activityList or not activityList.Parent then return end
+        local stamp = os.date("%H:%M:%S")
+        local row = uiCard(activityList, "ActivityEntry", UDim2.new(), UDim2.new(1, -8, 0, 58))
+        table.insert(activityRows, 1, row)
+        row.LayoutOrder = 1
+        for index, existing in ipairs(activityRows) do
+            if existing and existing.Parent then existing.LayoutOrder = index end
+        end
+        local dotColor = kind == "error" and Color3.fromRGB(224, 119, 119)
+            or (kind == "success" and Color3.fromRGB(111, 207, 151) or accentColor)
+        local dot = uiNew("Frame", {
+            Position = UDim2.fromOffset(13, 25),
+            Size = UDim2.fromOffset(7, 7),
+            BackgroundColor3 = dotColor,
+            BorderSizePixel = 0,
+        }, row)
+        uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, dot)
+        uiText(row, tostring(title or "Event"), {
+            Position = UDim2.fromOffset(29, 7),
+            Size = UDim2.new(1, -120, 0, 18),
+            Font = Enum.Font.GothamSemibold,
+            TextSize = 10,
+        })
+        uiText(row, tostring(detail or ""), {
+            Position = UDim2.fromOffset(29, 27),
+            Size = UDim2.new(1, -120, 0, 19),
+            Font = Enum.Font.Gotham,
+            TextSize = 8,
+            TextColor3 = Color3.fromRGB(143, 160, 180),
+            TextTruncate = Enum.TextTruncate.AtEnd,
+        })
+        uiText(row, stamp, {
+            Position = UDim2.new(1, -82, 0, 18),
+            Size = UDim2.fromOffset(68, 18),
+            Font = Enum.Font.GothamMedium,
+            TextSize = 8,
+            TextXAlignment = Enum.TextXAlignment.Right,
+            TextColor3 = Color3.fromRGB(143, 160, 180),
+        })
+        while #activityRows > 30 do
+            local oldest = table.remove(activityRows)
+            if oldest and oldest.Parent then oldest:Destroy() end
+        end
+        activityCountLabel.Text = string.format("%02d EVENTS", #activityRows)
+    end
+    env.V4wareNotify = function(title, detail, kind)
+        if pushActivity then pushActivity(title, detail, kind) end
+    end
+    clearActivityButton.Activated:Connect(function()
+        for _, row in ipairs(activityRows) do
+            if row and row.Parent then row:Destroy() end
+        end
+        table.clear(activityRows)
+        activityCountLabel.Text = "00 EVENTS"
+    end)
 
     local function applyAccent()
         accentColor = accentChoices[accentIndex]
@@ -2649,12 +2906,84 @@ local function buildMenu()
             row.value.TextColor3 = accentColor
         end
         for _, card in pairs(featureCards) do card.value.TextColor3 = accentColor end
+        for _, value in pairs(dashboardMetrics) do value.TextColor3 = accentColor end
+        if activityCountLabel then activityCountLabel.TextColor3 = accentColor end
+        if scaleValueLabel then scaleValueLabel.TextColor3 = accentColor end
     end
 
     accentButton.Activated:Connect(function()
         accentIndex = accentIndex % #accentChoices + 1
         applyAccent()
+        saveUIPreferences()
+        if pushActivity then pushActivity("Accent changed", "Interface color updated.", "success") end
     end)
+
+    panelKeyButton.Activated:Connect(function()
+        capturingPanelKey = true
+        panelKeyButton.Text = "PRESS KEY"
+        if pushActivity then pushActivity("Shortcut capture", "Press a keyboard key; Escape cancels.", "info") end
+    end)
+
+    saveProfileButton.Activated:Connect(function()
+        local ok, mode = saveUIPreferences()
+        profileStatus.Text = ok and (mode == "FILE" and "PROFILE SAVED TO FILE" or "SAVED FOR THIS EXECUTOR SESSION") or "SAVE FAILED: " .. tostring(mode)
+        profileStatus.TextColor3 = ok and Color3.fromRGB(111, 207, 151) or Color3.fromRGB(224, 119, 119)
+        if pushActivity then pushActivity("UI profile saved", ok and mode or tostring(mode), ok and "success" or "error") end
+    end)
+
+    loadProfileButton.Activated:Connect(function()
+        local loaded = loadUIPreferences()
+        if not loaded then
+            profileStatus.Text = "NO SAVED UI PROFILE FOUND"
+            profileStatus.TextColor3 = Color3.fromRGB(226, 185, 112)
+            if pushActivity then pushActivity("UI profile not found", "Save a profile first.", "info") end
+            return
+        end
+        panelScale.Scale = uiScaleValue
+        menuPanel.Size = compactMode and UDim2.fromOffset(820, 550) or UDim2.fromOffset(880, 580)
+        monitorToggle.Text = monitorEnabled and "ON" or "OFF"
+        compactToggle.Text = compactMode and "ON" or "OFF"
+        panelKeyButton.Text = panelKey.Name:upper()
+        applyAccent()
+        scaleValueLabel.Text = string.format("%.2fx", uiScaleValue)
+        if updateSystemMonitor then updateSystemMonitor() end
+        if syncFPSCounter then syncFPSCounter() end
+        if refreshDashboard then refreshDashboard() end
+        profileStatus.Text = "UI PROFILE LOADED"
+        profileStatus.TextColor3 = Color3.fromRGB(111, 207, 151)
+        if pushActivity then pushActivity("UI profile loaded", "Appearance preferences restored.", "success") end
+    end)
+
+    resetProfileButton.Activated:Connect(function()
+        accentIndex = 1
+        accentColor = accentChoices[accentIndex]
+        compactMode = false
+        monitorEnabled = true
+        panelKey = Enum.KeyCode.Insert
+        uiScaleValue = 1
+        panelScale.Scale = uiScaleValue
+        menuPanel.Size = UDim2.fromOffset(880, 580)
+        monitorToggle.Text = "ON"
+        compactToggle.Text = "OFF"
+        panelKeyButton.Text = "INSERT"
+        scaleValueLabel.Text = "1.00x"
+        applyAccent()
+        saveUIPreferences()
+        if updateSystemMonitor then updateSystemMonitor() end
+        if syncFPSCounter then syncFPSCounter() end
+        profileStatus.Text = "DEFAULT UI PREFERENCES RESTORED"
+        profileStatus.TextColor3 = Color3.fromRGB(111, 207, 151)
+        if pushActivity then pushActivity("UI preferences reset", "Default interface settings restored.", "success") end
+    end)
+
+    local function changeUIScale(delta)
+        uiScaleValue = math.clamp(math.floor((uiScaleValue + delta) * 100 + 0.5) / 100, 0.85, 1.10)
+        panelScale.Scale = uiScaleValue
+        scaleValueLabel.Text = string.format("%.2fx", uiScaleValue)
+        saveUIPreferences()
+    end
+    scaleMinus.Activated:Connect(function() changeUIScale(-0.05) end)
+    scalePlus.Activated:Connect(function() changeUIScale(0.05) end)
 
     monitorToggle.Activated:Connect(function()
         monitorEnabled = not monitorEnabled
@@ -2662,12 +2991,16 @@ local function buildMenu()
         monitorToggle.TextColor3 = monitorEnabled and Color3.fromRGB(111, 207, 151) or Color3.fromRGB(160, 166, 176)
         if updateSystemMonitor then updateSystemMonitor() end
         if syncFPSCounter then syncFPSCounter() end
+        saveUIPreferences()
+        if pushActivity then pushActivity("System monitor", monitorEnabled and "Telemetry enabled." or "Telemetry paused.", "info") end
     end)
 
     compactToggle.Activated:Connect(function()
         compactMode = not compactMode
         compactToggle.Text = compactMode and "ON" or "OFF"
         menuPanel.Size = compactMode and UDim2.fromOffset(820, 550) or UDim2.fromOffset(880, 580)
+        saveUIPreferences()
+        if pushActivity then pushActivity("Panel layout", compactMode and "Compact mode enabled." or "Compact mode disabled.", "info") end
     end)
 
     -- Render helpers
@@ -2703,12 +3036,20 @@ local function buildMenu()
                 BorderSizePixel = 0,
             }, row)
             uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, avatar)
-            task.spawn(function()
-                local ok, contentImage = pcall(function()
-                    return Players:GetUserThumbnailAsync(targetPlayer.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
+            local cachedThumbnail = avatarThumbnailCache[targetPlayer.UserId]
+            if cachedThumbnail then
+                avatar.Image = cachedThumbnail
+            else
+                task.spawn(function()
+                    local ok, contentImage = pcall(function()
+                        return Players:GetUserThumbnailAsync(targetPlayer.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
+                    end)
+                    if ok and type(contentImage) == "string" then
+                        avatarThumbnailCache[targetPlayer.UserId] = contentImage
+                        if avatar.Parent then avatar.Image = contentImage end
+                    end
                 end)
-                if ok and avatar.Parent then avatar.Image = contentImage end
-            end)
+            end
 
             uiText(row, targetPlayer.DisplayName, {
                 Position = UDim2.fromOffset(62, 8),
@@ -2814,6 +3155,8 @@ local function buildMenu()
             updateSystemMonitor()
         elseif selectedTab == "overview" then
             refreshDashboard()
+        elseif selectedTab == "activity" then
+            if activityCountLabel then activityCountLabel.Text = string.format("%02d EVENTS", #activityRows) end
         elseif selectedTab == "spread" then
             for _, item in ipairs(spreadNames) do updateSpreadRow(item.key) end
             local patched = (spreadPatched["[Double-Barrel SG]"] or 0)
@@ -2896,6 +3239,7 @@ local function buildMenu()
 end
 
 buildMenu()
+if pushActivity then pushActivity("V4WARE V21.0 ready", "Utility dashboard initialized.", "success") end
 
 -- FPS sampler sob demanda: não mantém callback RenderStepped quando o monitor
 -- não está visível/ativo. A medição continua com janela de 1 segundo.
@@ -2905,7 +3249,7 @@ syncFPSCounter = function()
         and menuBodyVisible
         and menuGui ~= nil
         and menuGui.Enabled
-        and selectedTab == "system"
+        and (selectedTab == "system" or selectedTab == "overview")
         and monitorEnabled
 
     if shouldSample then
@@ -2935,14 +3279,30 @@ end
 syncFPSCounter()
 
 connectSignal(UserInputService.InputBegan, function(input, processed)
+    if capturingPanelKey and input.UserInputType == Enum.UserInputType.Keyboard then
+        if input.KeyCode == Enum.KeyCode.Escape then
+            capturingPanelKey = false
+            if panelKeyButton then panelKeyButton.Text = panelKey.Name:upper() end
+            return
+        end
+        panelKey = input.KeyCode
+        capturingPanelKey = false
+        if panelKeyButton then panelKeyButton.Text = panelKey.Name:upper() end
+        saveUIPreferences()
+        if pushActivity then pushActivity("Menu shortcut updated", "New shortcut: " .. panelKey.Name, "success") end
+        return
+    end
     if processed or input.UserInputType ~= Enum.UserInputType.Keyboard then return end
     if input.KeyCode == panelKey and menuGui then
         menuVisible = not menuVisible
         menuGui.Enabled = menuVisible
         if menuVisible then
-            panelScale.Scale = 0.985
-            playUiTween(panelScale, PAGE_IN, {Scale = 1})
+            panelScale.Scale = uiScaleValue * 0.985
+            playUiTween(panelScale, PAGE_IN, {Scale = uiScaleValue})
             if renderMenu then renderMenu() end
+            if pushActivity then pushActivity("Panel opened", "V4WARE utility dashboard opened.", "info") end
+        else
+            if pushActivity then pushActivity("Panel closed", "Dashboard hidden.", "info") end
         end
         if syncFPSCounter then syncFPSCounter() end
     end
@@ -3019,7 +3379,8 @@ local function stop()
     restoreSpread()
     if env.DHC_Stop == stop then env.DHC_Stop = nil end
     if env.DHC_Status == status then env.DHC_Status = nil end
-    print("[V4ware V20.5] Parado; menu fechado e constantes restauradas onde possivel.")
+    if env.V4wareNotify then env.V4wareNotify = nil end
+    print("[V4ware V21.0] Parado; interface encerrada e conexoes limpas.")
 end
 
 env.DHC_Stop = stop
@@ -3027,8 +3388,8 @@ env.DHC_Status = status
 refreshESP()
 updateHitboxes()
 updateSpread()
-print("[V4ware V20.5] Iniciado: INSERT menu (Overview / Players / Spread / Hitbox / System / Settings) | Pulo somente COM OS PES APOIADOS; sem buffer, sem voo e sem cooldown artificial")
+print("[V4ware V21.0] Iniciado: painel (Overview / Players / Spread / Hitbox / System / Settings / Activity) | preferencias visuais separadas")
 print("[V4ware V20] Trigger: delay cliente 0 | DB 180 | Revolver 260 | Tactical 180 | limite geral 280 studs")
-print("[V4ware V20.5] Menu: INSERT | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
+print("[V4ware V21.0] Menu: atalho configuravel | Status: getgenv().DHC_Status() | Parar: getgenv().DHC_Stop()")
 warn("[V4ware V20] Experimento de patch de CONSTANTES especificas. Sem hook FireServer; resultado real nao testado.")
 print("[V4ware WS] Weapon Switch ativo: V -> DB / Tactical / Revolver, respeitando cooldowns do jogo")
