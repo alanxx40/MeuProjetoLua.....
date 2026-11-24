@@ -1610,9 +1610,8 @@ local function uiText(parent, txt, props)
     return uiNew("TextLabel", p, parent)
 end
 
--- Hover motion: tweens event-driven (sem loop por frame), com escala e realce discretos.
-local HOVER_IN = TweenInfo.new(0.14, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-local HOVER_OUT = TweenInfo.new(0.17, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+-- UI refresh: hover discreto e orientado a eventos, sem UIScale/tweens por controle.
+-- As transicoes de pagina e abertura continuam usando playUiTween.
 local PAGE_IN = TweenInfo.new(0.16, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
 
 local function playUiTween(target, info, properties)
@@ -1631,55 +1630,34 @@ local function addHoverMotion(guiObject, options)
     options = options or {}
     if not guiObject or not guiObject:IsA("GuiObject") then return end
 
-    local scale = uiNew("UIScale", {Scale = 1}, guiObject)
     local stroke = guiObject:FindFirstChildOfClass("UIStroke")
     local baseBackground = guiObject.BackgroundColor3
     local baseTransparency = guiObject.BackgroundTransparency
     local baseTextColor = guiObject:IsA("TextButton") and guiObject.TextColor3 or nil
     local baseStrokeColor = stroke and stroke.Color or nil
     local baseStrokeThickness = stroke and stroke.Thickness or nil
-    local hoverScale = options.Scale or 1.025
     local blend = options.Blend or 0.10
+    local hoverText = baseTextColor and baseTextColor:Lerp(Color3.fromRGB(255, 255, 255), 0.10) or nil
 
     guiObject.MouseEnter:Connect(function()
-        playUiTween(scale, HOVER_IN, {Scale = hoverScale})
-
-        local enterProperties = {}
         if baseTransparency < 1 and options.Background ~= false then
-            enterProperties.BackgroundColor3 = baseBackground:Lerp(accentColor, blend)
+            guiObject.BackgroundColor3 = baseBackground:Lerp(accentColor, blend)
         end
-        if baseTextColor then
-            enterProperties.TextColor3 = baseTextColor:Lerp(Color3.fromRGB(255, 255, 255), 0.14)
-        end
-        if next(enterProperties) then
-            playUiTween(guiObject, HOVER_IN, enterProperties)
-        end
+        if hoverText then guiObject.TextColor3 = hoverText end
         if stroke then
-            playUiTween(stroke, HOVER_IN, {
-                Color = accentColor,
-                Thickness = math.max(baseStrokeThickness or 1, 1.35),
-            })
+            stroke.Color = accentColor
+            stroke.Thickness = math.max(baseStrokeThickness or 1, 1.2)
         end
     end)
 
     guiObject.MouseLeave:Connect(function()
-        playUiTween(scale, HOVER_OUT, {Scale = 1})
-
-        local leaveProperties = {}
         if baseTransparency < 1 and options.Background ~= false then
-            leaveProperties.BackgroundColor3 = baseBackground
+            guiObject.BackgroundColor3 = baseBackground
         end
-        if baseTextColor then
-            leaveProperties.TextColor3 = baseTextColor
-        end
-        if next(leaveProperties) then
-            playUiTween(guiObject, HOVER_OUT, leaveProperties)
-        end
+        if baseTextColor then guiObject.TextColor3 = baseTextColor end
         if stroke then
-            playUiTween(stroke, HOVER_OUT, {
-                Color = baseStrokeColor,
-                Thickness = baseStrokeThickness,
-            })
+            stroke.Color = baseStrokeColor
+            stroke.Thickness = baseStrokeThickness
         end
     end)
 end
@@ -1687,7 +1665,7 @@ end
 local function uiButton(parent, txt, props)
     local p = {
         Text = txt,
-        BackgroundColor3 = Color3.fromRGB(29, 33, 40),
+        BackgroundColor3 = Color3.fromRGB(31, 37, 46),
         BorderSizePixel = 0,
         Font = Enum.Font.GothamMedium,
         TextSize = 11,
@@ -1697,7 +1675,7 @@ local function uiButton(parent, txt, props)
     for k, v in pairs(props or {}) do p[k] = v end
     local button = uiNew("TextButton", p, parent)
     uiNew("UICorner", {CornerRadius = UDim.new(0, 8)}, button)
-    uiNew("UIStroke", {Color = Color3.fromRGB(47, 54, 64), Thickness = 1}, button)
+    uiNew("UIStroke", {Color = Color3.fromRGB(48, 57, 70), Thickness = 1}, button)
     addHoverMotion(button, {Scale = 1.035, Blend = 0.18})
     return button
 end
@@ -1707,12 +1685,11 @@ local function uiCard(parent, name, position, size)
         Name = name,
         Position = position,
         Size = size,
-        BackgroundColor3 = Color3.fromRGB(23, 27, 33),
+        BackgroundColor3 = Color3.fromRGB(24, 29, 37),
         BorderSizePixel = 0,
     }, parent)
     uiNew("UICorner", {CornerRadius = UDim.new(0, 10)}, card)
-    uiNew("UIStroke", {Color = Color3.fromRGB(43, 49, 58), Thickness = 1}, card)
-    addHoverMotion(card, {Scale = 1.018, Blend = 0.12})
+    uiNew("UIStroke", {Color = Color3.fromRGB(48, 57, 70), Thickness = 1}, card)
     return card
 end
 
@@ -1776,7 +1753,7 @@ local function buildMenu()
         Size = UDim2.fromOffset(740, 500),
         AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.fromScale(0.5, 0.5),
-        BackgroundColor3 = Color3.fromRGB(12, 14, 18),
+        BackgroundColor3 = Color3.fromRGB(14, 17, 22),
         BorderSizePixel = 0,
         Active = true,
     }, menuGui)
@@ -1792,19 +1769,27 @@ local function buildMenu()
     local header = uiNew("Frame", {
         Name = "Header",
         Size = UDim2.new(1, 0, 0, 66),
-        BackgroundColor3 = Color3.fromRGB(17, 20, 25),
+        BackgroundColor3 = Color3.fromRGB(18, 22, 29),
         BorderSizePixel = 0,
     }, menuPanel)
     uiNew("UICorner", {CornerRadius = UDim.new(0, 14)}, header)
     uiNew("Frame", {
         Position = UDim2.new(0, 0, 1, -13),
         Size = UDim2.new(1, 0, 0, 13),
-        BackgroundColor3 = Color3.fromRGB(17, 20, 25),
+        BackgroundColor3 = Color3.fromRGB(18, 22, 29),
         BorderSizePixel = 0,
     }, header)
 
+    local headerAccentLine = uiNew("Frame", {
+        Name = "AccentDivider",
+        Position = UDim2.new(0, 18, 1, -1),
+        Size = UDim2.new(1, -36, 0, 1),
+        BackgroundColor3 = accentColor,
+        BackgroundTransparency = 0.28,
+        BorderSizePixel = 0,
+    }, header)
     local logo = uiCard(header, "LogoMark", UDim2.fromOffset(18, 14), UDim2.fromOffset(38, 38))
-    uiText(logo, "V4", {
+    local logoText = uiText(logo, "V4", {
         Size = UDim2.fromScale(1, 1),
         TextXAlignment = Enum.TextXAlignment.Center,
         Font = Enum.Font.GothamBold,
@@ -1870,7 +1855,7 @@ local function buildMenu()
     local sidebar = uiNew("Frame", {
         Name = "Sidebar",
         Size = UDim2.new(0, 158, 1, 0),
-        BackgroundColor3 = Color3.fromRGB(17, 20, 25),
+        BackgroundColor3 = Color3.fromRGB(18, 22, 29),
         BorderSizePixel = 0,
     }, body)
     uiNew("Frame", {
@@ -1963,7 +1948,7 @@ local function buildMenu()
         local b = uiNew("TextButton", {
             Name = name .. "Nav",
             Size = UDim2.new(1, 0, 0, 43),
-            BackgroundColor3 = Color3.fromRGB(17, 20, 25),
+            BackgroundColor3 = Color3.fromRGB(18, 22, 29),
             BackgroundTransparency = 1,
             BorderSizePixel = 0,
             Text = "",
@@ -2001,7 +1986,6 @@ local function buildMenu()
             TextSize = 8,
             TextColor3 = Color3.fromRGB(97, 108, 123),
         })
-        local navScale = uiNew("UIScale", {Scale = 1}, b)
         local navStroke = uiNew("UIStroke", {
             Color = accentColor,
             Thickness = 1,
@@ -2009,29 +1993,26 @@ local function buildMenu()
         }, b)
         local navState = {
             button = b, bar = bar, icon = icon, title = title,
-            active = false, scale = navScale, stroke = navStroke,
+            active = false, stroke = navStroke,
         }
         navItems[name] = navState
 
         b.MouseEnter:Connect(function()
-            playUiTween(navScale, HOVER_IN, {Scale = 1.025})
-            playUiTween(navStroke, HOVER_IN, {Transparency = 0.55, Color = accentColor})
+            navStroke.Transparency = 0.55
+            navStroke.Color = accentColor
             if not navState.active then
-                playUiTween(b, HOVER_IN, {
-                    BackgroundTransparency = 0.42,
-                    BackgroundColor3 = Color3.fromRGB(25, 30, 37),
-                })
-                playUiTween(title, HOVER_IN, {TextColor3 = Color3.fromRGB(226, 232, 241)})
-                playUiTween(icon, HOVER_IN, {TextColor3 = accentColor})
+                b.BackgroundTransparency = 0.42
+                b.BackgroundColor3 = Color3.fromRGB(29, 36, 46)
+                title.TextColor3 = Color3.fromRGB(226, 232, 241)
+                icon.TextColor3 = accentColor
             end
         end)
         b.MouseLeave:Connect(function()
-            playUiTween(navScale, HOVER_OUT, {Scale = 1})
-            playUiTween(navStroke, HOVER_OUT, {Transparency = navState.active and 0.72 or 1})
+            navStroke.Transparency = navState.active and 0.72 or 1
             if not navState.active then
-                playUiTween(b, HOVER_OUT, {BackgroundTransparency = 1})
-                playUiTween(title, HOVER_OUT, {TextColor3 = Color3.fromRGB(135, 146, 161)})
-                playUiTween(icon, HOVER_OUT, {TextColor3 = Color3.fromRGB(135, 146, 161)})
+                b.BackgroundTransparency = 1
+                title.TextColor3 = Color3.fromRGB(135, 146, 161)
+                icon.TextColor3 = Color3.fromRGB(135, 146, 161)
             end
         end)
         return b
@@ -2149,7 +2130,7 @@ local function buildMenu()
     tabWhitelist = uiButton(playersPage, "WHITELIST", {
         Position = UDim2.fromOffset(22, 73),
         Size = UDim2.fromOffset(112, 29),
-        BackgroundColor3 = Color3.fromRGB(35, 42, 51),
+        BackgroundColor3 = Color3.fromRGB(39, 49, 62),
     })
     tabIncognito = uiButton(playersPage, "INCOGNITO", {
         Position = UDim2.fromOffset(142, 73),
@@ -2294,7 +2275,7 @@ local function buildMenu()
         local track = uiNew("Frame", {
             Position = UDim2.fromOffset(13, 43),
             Size = UDim2.new(1, -26, 0, 7),
-            BackgroundColor3 = Color3.fromRGB(43, 49, 58),
+            BackgroundColor3 = Color3.fromRGB(48, 57, 70),
             BorderSizePixel = 0,
         }, card)
         uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, track)
@@ -2474,7 +2455,7 @@ local function buildMenu()
         local track = uiNew("Frame", {
             Position = UDim2.fromOffset(13, 43),
             Size = UDim2.new(1, -26, 0, 7),
-            BackgroundColor3 = Color3.fromRGB(43, 49, 58),
+            BackgroundColor3 = Color3.fromRGB(48, 57, 70),
             BorderSizePixel = 0,
         }, card)
         uiNew("UICorner", {CornerRadius = UDim.new(1, 0)}, track)
@@ -2649,6 +2630,7 @@ local function buildMenu()
     local function applyAccent()
         accentColor = accentChoices[accentIndex]
         logoText.TextColor3 = accentColor
+        headerAccentLine.BackgroundColor3 = accentColor
         for _, item in pairs(navItems) do item.bar.BackgroundColor3 = accentColor end
         for _, row in pairs(spreadRows) do row.fill.BackgroundColor3 = accentColor end
         for _, row in pairs(hitboxRows) do
@@ -2813,15 +2795,15 @@ local function buildMenu()
                 item.bar.Size = UDim2.fromOffset(3, 0)
             end
             item.button.BackgroundTransparency = active and 0 or 1
-            item.button.BackgroundColor3 = active and Color3.fromRGB(25, 30, 37) or Color3.fromRGB(17, 20, 25)
+            item.button.BackgroundColor3 = active and Color3.fromRGB(29, 36, 46) or Color3.fromRGB(18, 22, 29)
             item.title.TextColor3 = active and Color3.fromRGB(241, 244, 249) or Color3.fromRGB(135, 146, 161)
             item.icon.TextColor3 = active and accentColor or Color3.fromRGB(135, 146, 161)
             item.stroke.Transparency = active and 0.72 or 1
         end
 
         if selectedTab == "players" then
-            tabWhitelist.BackgroundColor3 = selectedPlayerTab == "whitelist" and Color3.fromRGB(38, 47, 58) or Color3.fromRGB(29, 33, 40)
-            tabIncognito.BackgroundColor3 = selectedPlayerTab == "incognito" and Color3.fromRGB(38, 47, 58) or Color3.fromRGB(29, 33, 40)
+            tabWhitelist.BackgroundColor3 = selectedPlayerTab == "whitelist" and Color3.fromRGB(39, 49, 62) or Color3.fromRGB(31, 37, 46)
+            tabIncognito.BackgroundColor3 = selectedPlayerTab == "incognito" and Color3.fromRGB(39, 49, 62) or Color3.fromRGB(31, 37, 46)
             renderPlayers()
         elseif selectedTab == "system" then
             updateSystemMonitor()
