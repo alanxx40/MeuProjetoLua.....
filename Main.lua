@@ -742,6 +742,7 @@ local function updateSpread()
     local supportedSpreadPlaces = {
         [97124701004636] = true,
         [119280064370189] = true,
+        [131122153451040] = true,
     }
     if not supportedSpreadPlaces[game.PlaceId] then
         spreadLastError = "PlaceId nao corresponde a uma experiencia analisada"
