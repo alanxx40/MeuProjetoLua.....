@@ -33,6 +33,21 @@ local V4wareFastFlags = {
     ["DFIntAuroraInputLatencySmoothTimeMillisecondsUpwards"] = 100,
     ["DFIntAngularVelociryLimit"] = 0,
     ["DFIntAccelerationTimeThreshold"] = 0,
+    -- Fisica e movimento (nomes fornecidos, sem inferir prefixos).
+    ["AssemblyHistoryBufferSize"] = 128,
+    ["AssemblyHistorySkipSize"] = 1,
+    ["BroadPhaseIslandAlwaysSimulateDepth"] = true,
+    ["BulletContactBreakThresholdPercent"] = 50,
+    -- Animacao e simulacao.
+    ["BindToSimulationParallel"] = true,
+    ["BindToAnimationParallel"] = true,
+    ["AnimationParallelThreadMax"] = 8,
+    ["AnimationParallelTimeBudgetUs"] = 4000,
+    -- Rede.
+    ["CLI55145CliPopOverrideRttMs"] = 5,
+    ["CLI55145PopDcOverrideRttMs"] = 5,
+    -- Renderizacao.
+    ["AutomaticDRS5"] = false,
     -- AnimationLodThrottleMaxFramesToSkip: nome/tipo e valor ainda nao confirmados.
 }
 
